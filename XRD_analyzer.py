@@ -43,19 +43,36 @@ def gaussian(x, a, x0, sigma, offset):
 
 @st.cache_data
 def get_theoretical_patterns(phases_list, _api_key):
+    """Загрузка данных из API с проверкой стабильности"""
     if not _api_key or not phases_list: return {}
     results = {}
     try:
         with MPRester(_api_key) as mpr:
             for formula in [p.strip() for p in phases_list.split(",") if p.strip()]:
-                docs = mpr.materials.summary.search(formula=formula, energy_above_hull=(0, 0.1), 
-                                                    fields=["structure", "material_id", "symmetry"])
+                # Добавили поля is_stable и energy_above_hull
+                docs = mpr.materials.summary.search(
+                    formula=formula, 
+                    energy_above_hull=(0, 0.15), # Немного расширили диапазон
+                    fields=["structure", "material_id", "symmetry", "is_stable", "energy_above_hull"]
+                )
+                
+                # Сортируем: сначала самые стабильные
+                docs = sorted(docs, key=lambda x: x.energy_above_hull)
+
                 for doc in docs:
-                    name = f"{formula} ({doc.symmetry.crystal_system.value}, {doc.material_id})"
-                    results[name] = XRDCalculator().get_pattern(doc.structure)
+                    # Формируем метку стабильности
+                    if doc.is_stable:
+                        st_label = "✅ Stable"
+                    else:
+                        st_label = f"⚠️ Metastable (+{round(doc.energy_above_hull, 3)} eV)"
+                    
+                    # Новое имя для списка выбора
+                    name = f"{formula} | {doc.symmetry.crystal_system.value} ({doc.material_id}) | {st_label}"
+                    
+                    results[name] = XRDCalculator(wavelength='CuKa').get_pattern(doc.structure)
         return results
     except Exception as e:
-        st.error(f"API Error: {e}")
+        st.error(f"Ошибка API: {e}")
         return {}
 
 # --- ИНТЕРФЕЙС ---
