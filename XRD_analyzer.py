@@ -118,7 +118,8 @@ if uploaded_files:
         # Используем constrained_layout=True — это залог того, что легенда не налезет на график
         fig_water, ax_water = plt.subplots(figsize=(12, fig_height), constrained_layout=True)
         
-        offset_step = 0.7 
+        offset_step = 1.0
+        peak_scaling = 0.8
         total_offset = (num_files - 1) * offset_step
         
         # 1. Метки фаз (vlines)
@@ -137,8 +138,10 @@ if uploaded_files:
         for i, (name, df) in enumerate(file_names):
             current_offset = i * offset_step
             m_val = df['net'].max()
-            norm_y = (df['net'] / m_val if m_val > 0 else df['net']) + current_offset
-            
+            if m_val > 0:
+                norm_y = (df['net'] / m_val * peak_scaling) + current_offset
+            else:
+                norm_y = df['net'] + current_offset
             # Заливка для эффекта непрозрачности нижних слоев
             ax_water.fill_between(df['2theta'], current_offset, norm_y, color='white', zorder=i*2)
             # Чтобы длинные названия не ломали всё, можно их чуть сократить в легенде, 
@@ -148,7 +151,7 @@ if uploaded_files:
         ax_water.set_xlabel(r"$2\theta$ (deg)")
         ax_water.set_ylabel("Normalized Intensity + Offset")
         ax_water.set_xlim(float(min_2t), float(max_2t))
-        ax_water.set_ylim(0, total_offset + 1.5) 
+        ax_water.set_ylim(0, total_offset + 1.2) 
         
         # МАГИЯ ЗДЕСЬ: loc='upper left' и bbox_to_anchor=(1.02, 1) 
         # выносит легенду СТРОГО вправо за пределы рамки графика
