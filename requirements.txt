@@ -1,0 +1,7 @@
+streamlit
+pandas
+matplotlib
+numpy
+mp-api
+pymatgen
+scipy
