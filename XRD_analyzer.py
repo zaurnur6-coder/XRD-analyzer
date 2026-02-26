@@ -164,6 +164,18 @@ if uploaded_files:
         )
         
         st.pyplot(fig_water)
+        # --- Кнопка скачивания для Waterfall ---
+        buf_water = io.BytesIO()
+        # Применяем dpi_val из твоего меню в боковой панели
+        fig_water.savefig(buf_water, format='png', dpi=dpi_val, bbox_inches='tight')
+        
+        st.download_button(
+            label=f"💾 Скачать Waterfall (PNG, {dpi_val} DPI)",
+            data=buf_water.getvalue(),
+            file_name="XRD_Waterfall_Comparison.png",
+            mime="image/png",
+            key="btn_waterfall_save" # Уникальный ключ
+        )
         
     else:
         # --- ДЕТАЛЬНЫЙ РЕЖИМ ---
