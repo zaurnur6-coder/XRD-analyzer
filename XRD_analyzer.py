@@ -303,7 +303,7 @@ if uploaded_files:
                     mask = (patt.x >= df_target['2theta'].min()) & (patt.x <= df_target['2theta'].max())
                     
                     # Название фазы для легенды (краткое)
-                    short_label = p_full_name.split("|")[0].strip()
+                    clean_name = ref.get("legend_name", p_full_name.split("|")[0].strip())
                     
                     # Отрисовка vlines. Высота нормируется по max_net и stick_scale
                     # Добавляем небольшое смещение вниз, чтобы палочки начинались чуть ниже нуля для наглядности
