@@ -96,9 +96,10 @@ def get_theoretical_patterns(phases_list, _api_key):
                         
                         crystal_sys = doc.symmetry.crystal_system.value
                         space_group = doc.symmetry.symbol
+                        m_id = str(doc.material_id) 
                         
-                        clean_name = f"{doc.formula_pretty} | {crystal_sys} ({space_group})"
-                        full_name = f"{clean_name} | {doc.material_id} | {st_label}"
+                        clean_name = f"{doc.formula_pretty} | {crystal_sys} ({m_id})"
+                        full_name = f"{clean_name} | {space_group} | {st_label}"
                         
                         calc = XRDCalculator(wavelength='CuKa')
                         pattern = calc.get_pattern(doc.structure)
@@ -115,7 +116,8 @@ def get_theoretical_patterns(phases_list, _api_key):
                             "pattern": pattern,
                             "hkls": hkl_list,
                             "system": crystal_sys,
-                            "legend_name": clean_name
+                            "legend_name": clean_name,
+                            "mp_id": m_id
                         }
                 except Exception as e:
                     warnings.append(f"Ошибка при поиске {formula}: {str(e)}")
@@ -359,7 +361,7 @@ if uploaded_files:
                 mask = (patt.x >= min_2t) & (patt.x <= max_2t)
                 
                 # Короткое имя для легенды
-                clean_label = p_full_name.split("|")[0].strip()
+                clean_label = ref.get("legend_name", p_full_name.split("|")[0].strip())
                 
                 # Рисуем вертикальные линии через весь график
                 ax_water.vlines(patt.x[mask], -0.1, total_max_offset + 1.1, 
@@ -385,7 +387,7 @@ if uploaded_files:
                                       color='white', zorder=i*2)
             
             # Рисуем саму линию
-            ax_water.plot(df['2theta'], norm_y, label=name, 
+            ax_water.plot(df['2theta'], norm_y, label=None, 
                           color=sample_colors[i], lw=1.2, zorder=i*2+1)
             
             # Подпись названия файла прямо над графиком (опционально)
@@ -483,6 +485,11 @@ if uploaded_files:
                         
                         popt, _ = curve_fit(pseudo_voigt, x_fit, y_fit, p0=p0, bounds=bounds, maxfev=3000)
                         
+                        y_pred = pseudo_voigt(x_fit, *popt)
+                        ss_res = np.sum((y_fit - y_pred) ** 2)
+                        ss_tot = np.sum((y_fit - np.mean(y_fit)) ** 2)
+                        r_sq = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+                        
                         amp, center, hwhm, eta, offset = popt
                         fwhm_obs = 2 * hwhm # Для Псевдо-Фойгта в моей реализации sigma - это HWHM
                         
@@ -510,6 +517,7 @@ if uploaded_files:
                                     "FWHM (°)": round(fwhm_obs, 4),
                                     "L-доля (η)": round(eta, 2),
                                     "Размер (nm)": round(size_nm, 1)
+                                    "R²": round(r_sq, 4) 
                                 })
                     except Exception:
                         continue
