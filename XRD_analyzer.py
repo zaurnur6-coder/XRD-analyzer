@@ -516,7 +516,7 @@ if uploaded_files:
                                     "2θ": round(center, 3),
                                     "FWHM (°)": round(fwhm_obs, 4),
                                     "L-доля (η)": round(eta, 2),
-                                    "Размер (nm)": round(size_nm, 1)
+                                    "Размер (nm)": round(size_nm, 1),
                                     "R²": round(r_sq, 4) 
                                 })
                     except Exception:
