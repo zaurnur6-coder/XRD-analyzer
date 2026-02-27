@@ -7,6 +7,7 @@ import os
 from scipy.optimize import curve_fit
 from mp_api.client import MPRester
 from pymatgen.analysis.diffraction.xrd import XRDCalculator
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 # --- НАСТРОЙКИ СТИЛЯ ---
 st.set_page_config(page_title="XRD Advanced Batch Analyzer", layout="wide", page_icon="📈")
@@ -72,13 +73,13 @@ def get_theoretical_patterns(phases_list, _api_key):
         with MPRester(_api_key) as mpr:
             for formula in target_formulas:
                 try:
-                    # Убираем sort_by из запроса, чтобы избежать ошибки
                     docs = mpr.materials.summary.search(
                         formula=formula, 
                         energy_above_hull=(0, 0.3), 
                         fields=[
                             "structure", "material_id", "symmetry", 
-                            "is_stable", "energy_above_hull", "formula_pretty"
+                            "is_stable", "energy_above_hull", "formula_pretty",
+                            "density", "volume"
                         ]
                     )
                     
@@ -86,11 +87,9 @@ def get_theoretical_patterns(phases_list, _api_key):
                         warnings.append(f"Фаза {formula} не найдена.")
                         continue
 
-                    # Сортируем результаты вручную по энергии над хуллом (от самых стабильных)
                     sorted_docs = sorted(docs, key=lambda x: x.energy_above_hull)
 
-                    # Берем топ-5 самых стабильных
-                    for doc in sorted_docs[:10]:
+                    for doc in sorted_docs[:20]:
                         e_hull = round(doc.energy_above_hull, 3)
                         st_label = "✅ Stable" if (doc.is_stable or e_hull <= 0.0) else f"⚠️ Metastable (+{e_hull} eV)"
                         
@@ -100,23 +99,34 @@ def get_theoretical_patterns(phases_list, _api_key):
                         
                         clean_name = f"{doc.formula_pretty} | {crystal_sys} ({m_id})"
                         full_name = f"{clean_name} | {space_group} | {st_label}"
+
+                        try:
+                            sga = SpacegroupAnalyzer(doc.structure)
+                            conventional_structure = sga.get_conventional_standard_structure()
+                        except:
+                            conventional_structure = doc.structure # Если сбой, берем как есть
                         
                         calc = XRDCalculator(wavelength='CuKa')
-                        pattern = calc.get_pattern(doc.structure)
+                        pattern = calc.get_pattern(conventional_structure)
                         
-                        # Безопасное извлечение HKL
-                        hkl_list = []
-                        for h in pattern.hkls:
-                            if h and isinstance(h, list) and "hkl" in h[0]:
-                                hkl_list.append(h[0]["hkl"])
+                        # --- ВОЗВРАЩАЕМ ИЗВЛЕЧЕНИЕ HKL (для вкладки Шеррера) ---
+                        clean_hkls = []
+                        for hkl_group in pattern.hkls:
+                            if hkl_group:
+                                # Берем первый hkl и превращаем в кортеж
+                                h = hkl_group[0]['hkl']
+                                clean_hkls.append(tuple(h))
                             else:
-                                hkl_list.append((0,0,0))
+                                clean_hkls.append((0, 0, 0))
                         
+                        # Собираем полный словарь данных
                         results[full_name] = {
                             "pattern": pattern,
-                            "hkls": hkl_list,
+                            "hkls": clean_hkls,        # <--- ТЕПЕРЬ ОШИБКИ НЕ БУДЕТ
                             "system": crystal_sys,
                             "legend_name": clean_name,
+                            "density": doc.density,
+                            "volume": doc.volume,
                             "mp_id": m_id
                         }
                 except Exception as e:
@@ -129,28 +139,32 @@ def get_theoretical_patterns(phases_list, _api_key):
 
 def get_k_factor(hkl_tuple, crystal_system):
     """
-    Вычисляет K по формуле для граненых кубических кристаллов.
+    Вычисляет K. Для кубической системы используется формула формы.
+    Для остальных — стандарт 0.94.
     """
-    if not hkl_tuple or crystal_system.lower() != "cubic":
-        return 0.94 # Дефолт для некубических систем
+    if not hkl_tuple or hkl_tuple == (0, 0, 0):
+        return 0.94
 
-    # 1. Берем модули и сортируем: h >= k >= l
-    h_orig, k_orig, l_orig = [abs(x) for x in hkl_tuple]
-    h, k, l = sorted([h_orig, k_orig, l_orig], reverse=True)
+    if crystal_system.lower() == "cubic":
+        try:
+            # Сортируем h >= k >= l
+            h, k, l = sorted([abs(x) for x in hkl_tuple], reverse=True)
+            sum_sq = h**2 + k**2 + l**2
+            
+            if sum_sq == 0: return 0.94
+            
+            numerator = 6 * (h**3)
+            denominator = np.sqrt(sum_sq) * (6*(h**2) - 2*h*k + k*l - 2*h*l)
+            
+            if denominator == 0: return 0.94
+            
+            k_val = numerator / denominator
+            # Ограничиваем разумными пределами, чтобы не было выбросов
+            return round(np.clip(k_val, 0.5, 1.5), 3)
+        except:
+            return 0.94
     
-    # Защита от деления на 0
-    sum_sq = h**2 + k**2 + l**2
-    if sum_sq == 0: return 0.94
-    
-    # 2. Реализация формулы
-    numerator = 6 * (h**3)
-    denominator = np.sqrt(sum_sq) * (6*(h**2) - 2*h*k + k*l - 2*h*l)
-    
-    # Защита на случай математических аномалий (крайне редко)
-    if denominator == 0: return 0.94
-
-    k_final = numerator / denominator
-    return round(k_final, 3)
+    return 0.94
     
 # --- ИНТЕРФЕЙС ---
 
@@ -254,7 +268,7 @@ if uploaded_files:
         st.info("Введите формулу (например, Ag или Ag2O) в боковой панели, чтобы подгрузить эталоны.")
 
     # --- ВКЛАДКИ РЕЖИМОВ ---
-    tab1, tab2, tab3 = st.tabs(["🔍 Детальный Анализ", "🌊 Waterfall Сравнение", "📏 Расчет ОКР (Шеррер)"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🔍 Детальный Анализ", "🌊 Waterfall Сравнение", "📏 Расчет ОКР (Шеррер)", "Фазовый анализ BETA"])
 
 # 1. DETAILED ANALYSIS (ДЕТАЛЬНЫЙ АНАЛИЗ)
     with tab1:
@@ -444,17 +458,43 @@ if uploaded_files:
                 patt = p_info["pattern"]
                 
                 # 1. Берем самые интенсивные теоретические пики
-                peaks_data = sorted(zip(p_info["hkls"], patt.x, patt.y), 
-                                    key=lambda x: x[2], reverse=True)
+                # --- УЛУЧШЕННЫЙ ПОДБОР ПИКОВ ДЛЯ ФИТИРОВАНИЯ ---
                 
+                # Создаем список всех доступных пиков
+                available_peaks = []
+                for i in range(len(patt.x)):
+                    px = patt.x[i]
+                    py = patt.y[i]
+                    hkl = p_info["hkls"][i]
+                    
+                    # Фильтр 1: Пик должен быть в диапазоне измерения (с отступом)
+                    if px < df['2theta'].min() + 0.3 or px > df['2theta'].max() - 0.3:
+                        continue
+                        
+                    # Фильтр 2: Пик должен быть значимым (минимум 3% от макс. интенсивности эталона)
+                    if py < 3.0: 
+                        continue
+                        
+                    available_peaks.append((hkl, px, py))
+
+                # Сортируем по интенсивности (сначала самые сильные)
+                available_peaks.sort(key=lambda x: x[2], reverse=True)
+
                 targets = []
-                seen_angles = set()
-                for hkl, px, py in peaks_data:
-                    if px < df['2theta'].min() + 0.5 or px > df['2theta'].max() - 0.5: continue
-                    if any(abs(px - s) < 0.8 for s in seen_angles): continue 
-                    seen_angles.add(px)
+                seen_angles = []
+                
+                for hkl, px, py in available_peaks:
+                    # Фильтр 3: Не брать пики, которые слишком близко друг к другу 
+                    # (чтобы не фитировать один и тот же широкий пик дважды)
+                    if any(abs(px - s) < 1.0 for s in seen_angles): 
+                        continue 
+                        
+                    seen_angles.append(px)
                     targets.append((hkl, px, py))
-                    if len(targets) >= 6: break 
+                    
+                    # Берем максимум 6 самых четких пиков
+                    if len(targets) >= 6: 
+                        break 
 
                 # 2. Фитирование каждого пика
                 for hkl_tuple, p_theo, _ in targets:
@@ -512,7 +552,7 @@ if uploaded_files:
                                 all_results.append({
                                     "Образец": f_name, 
                                     "Фаза": f"{p_name.split('|')[0]}", 
-                                    "hkl": str(hkl_tuple),
+                                    "hkl": "".join(map(str, hkl_tuple)),
                                     "2θ": round(center, 3),
                                     "FWHM (°)": round(fwhm_obs, 4),
                                     "L-доля (η)": round(eta, 2),
@@ -544,3 +584,103 @@ if uploaded_files:
                 st.download_button("📂 Экспорт результатов в CSV", csv, "XRD_Scherrer_Analysis.csv", "text/csv")
             else:
                 st.error("❌ Не удалось надежно фитировать пики. Попробуйте уменьшить приборное уширение или проверьте фон.")
+
+
+    # --- TAB 4: QUANTITATIVE PHASE ANALYSIS (QPA) ---
+    with tab4:
+        st.subheader("🧪 Количественный фазовый анализ (Full Profile Fit)")
+        
+        if not selected_phases:
+            st.info("Выберите фазы в боковой панели для проведения анализа.")
+        else:
+            target_qpa = st.selectbox("Выберите образец для расчета состава", list(all_data.keys()), key="qpa_target")
+            df_qpa = all_data[target_qpa]
+            
+            col_qpa1, col_qpa2 = st.columns([1, 2])
+            
+            with col_qpa1:
+                st.markdown("**Настройки модели:**")
+                fit_fwhm = st.slider("Ширина пика (FWHM)", 0.05, 1.0, 0.2, 0.01)
+                fit_eta = st.slider("Доля Лоренца (Shape)", 0.0, 1.0, 0.5, 0.1)
+                fit_range = st.slider("Диапазон 2θ для фитирования", 
+                                    float(df_qpa['2theta'].min()), float(df_qpa['2theta'].max()), 
+                                    (float(df_qpa['2theta'].min()), float(df_qpa['2theta'].max())))
+
+            # Подготовка данных для фитирования
+            mask = (df_qpa['2theta'] >= fit_range[0]) & (df_qpa['2theta'] <= fit_range[1])
+            x_exp = df_qpa['2theta'][mask].values
+            y_exp = df_qpa['net'][mask].values # Используем данные с вычтенным фоном
+
+            def generate_full_model(scales, x, phases_data, fwhm, eta):
+                model = np.zeros_like(x)
+                sigma = fwhm / 2.0
+                for i, p_name in enumerate(selected_phases):
+                    p_info = phases_data[p_name]
+                    patt = p_info["pattern"]
+                    # Генерируем профиль фазы как сумму Псевдо-Фойгтов
+                    phase_signal = np.zeros_like(x)
+                    # Оптимизация: берем только значимые пики (>1% интенсивности)
+                    significant = patt.y > 1.0
+                    for px, py in zip(patt.x[significant], patt.y[significant]):
+                        phase_signal += py * pseudo_voigt(x, 1.0, px, sigma, eta, 0)
+                    model += scales[i] * phase_signal
+                return model
+
+            def loss_func(scales, x, y, phases_data, fwhm, eta):
+                return generate_full_model(scales, x, phases_data, fwhm, eta) - y
+
+            if st.button("🚀 Запустить расчет состава"):
+                with st.spinner("Оптимизация долей фаз..."):
+                    from scipy.optimize import least_squares
+                    
+                    # Начальные веса (поровну)
+                    initial_scales = np.ones(len(selected_phases)) * (np.max(y_exp) / 100)
+                    
+                    # Запуск минимизации (LMFIT аналог)
+                    res = least_squares(loss_func, initial_scales, 
+                                      args=(x_exp, y_exp, ref_data, fit_fwhm, fit_eta),
+                                      bounds=(0, np.inf))
+                    
+                    final_scales = res.x
+                    y_fit = generate_full_model(final_scales, x_exp, ref_data, fit_fwhm, fit_eta)
+                    
+                    # Расчет весовых долей
+                    # Формула: W_i = (S_i * rho_i * V_i) / sum(...)
+                    mass_factors = []
+                    for i, p_name in enumerate(selected_phases):
+                        info = ref_data[p_name]
+                        # Упрощенный весовой фактор: Scale * Density * Volume
+                        m_factor = final_scales[i] * info['density'] * info['volume']
+                        mass_factors.append(m_factor)
+                    
+                    total_mass = sum(mass_factors)
+                    weight_percents = [(m / total_mass) * 100 if total_mass > 0 else 0 for m in mass_factors]
+
+                    # --- ВИЗУАЛИЗАЦИЯ ---
+                    fig_qpa, ax_qpa = plt.subplots(figsize=(10, 5))
+                    ax_qpa.plot(x_exp, y_exp, 'k.', alpha=0.3, label='Experiment')
+                    ax_qpa.plot(x_exp, y_fit, 'r-', lw=2, label='Total Fit')
+                    
+                    # Отрисовка вклада каждой фазы
+                    for i, p_name in enumerate(selected_phases):
+                        p_info = ref_data[p_name]
+                        p_scale = [0] * len(selected_phases)
+                        p_scale[i] = final_scales[i]
+                        y_phase = generate_full_model(p_scale, x_exp, ref_data, fit_fwhm, fit_eta)
+                        ax_qpa.fill_between(x_exp, 0, y_phase, alpha=0.3, label=f"{p_info['legend_name']} ({weight_percents[i]:.1f}%)")
+                    
+                    ax_qpa.set_xlabel("2θ (deg.)")
+                    ax_qpa.set_ylabel("Intensity")
+                    ax_qpa.legend()
+                    st.pyplot(fig_qpa)
+                    
+                    # --- ТАБЛИЦА РЕЗУЛЬТАТОВ ---
+                    st.write("### 📊 Результаты количественного анализа")
+                    qpa_res_df = pd.DataFrame({
+                        "Фаза": [ref_data[p]['legend_name'] for p in selected_phases],
+                        "Масштабный коэфф.": final_scales,
+                        "Весовая доля (%)": weight_percents
+                    })
+                    st.table(qpa_res_df.style.format({"Весовая доля (%)": "{:.2f}"}))
+                    
+                    st.success(f"Качество фитирования (Residuals Sum): {np.sum(res.fun**2):.2e}")
