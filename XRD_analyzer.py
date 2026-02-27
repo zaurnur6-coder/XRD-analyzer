@@ -308,7 +308,7 @@ if uploaded_files:
                     # Отрисовка vlines. Высота нормируется по max_net и stick_scale
                     # Добавляем небольшое смещение вниз, чтобы палочки начинались чуть ниже нуля для наглядности
                     ax2.vlines(patt.x[mask], -max_net*0.02, patt.y[mask] * (max_net / 100) * stick_scale, 
-                              colors=f"C{i}", label=f"Ref: {short_label}", lw=1.5, alpha=0.7)
+                              colors=f"C{i}", label=f"Ref: {clean_name}", lw=1.5, alpha=0.7)
             
             ax2.set_xlabel(r"$2\theta$ (deg.)")
             ax2.set_ylabel("Net Intensity (a.u.)")
