@@ -4,7 +4,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import io
 import os
+import re
 from scipy.optimize import curve_fit
+from scipy import stats as scipy_stats
 from mp_api.client import MPRester
 from pymatgen.analysis.diffraction.xrd import XRDCalculator
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
@@ -12,13 +14,15 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 # --- НАСТРОЙКИ СТИЛЯ ---
 st.set_page_config(page_title="XRD Advanced Batch Analyzer", layout="wide", page_icon="📈")
 plt.rcParams.update({
-    "font.family": "serif", 
-    "mathtext.fontset": "stix",
-    "font.serif": ["Times New Roman"], 
-    "font.size": 11,
-    "axes.linewidth": 1.5, 
-    "xtick.direction": "in", 
-    "ytick.direction": "in"
+    # Используем DejaVu Serif — кросс-платформенный шрифт со встроенными math-глифами.
+    # Times New Roman на Windows ломает mathtext при fontset=stix (нет math-таблиц в TTF).
+    "font.family":        "serif",
+    "font.serif":         ["DejaVu Serif", "Times New Roman", "serif"],
+    "mathtext.fontset":   "dejavuserif",   # ← совместим с DejaVu Serif на всех платформах
+    "font.size":          11,
+    "axes.linewidth":     1.5,
+    "xtick.direction":    "in",
+    "ytick.direction":    "in",
 })
 
 # --- API KEY LOGIC ---
@@ -38,30 +42,51 @@ if not API_KEY:
 # --- ФУНКЦИИ ОБРАБОТКИ ---
 
 def simple_snip(intensity, iterations=20):
-    bg = np.sqrt(intensity + 1)
+    """
+    LLS SNIP (Statistics-sensitive Non-linear Iterative Peak-clipping).
+
+    Граничное условие — edge-clamping: при сдвиге на i позиций
+    за пределами массива используется крайнее значение (bg[0] или bg[-1]),
+    а не обёрнутое np.roll-значение и не сама точка.
+    Это предотвращает завышение фона у краёв спектра.
+    """
+    bg = np.sqrt(np.maximum(intensity, 0) + 1)   # sqrt-преобразование; защита от отрицательных
+    n = len(bg)
     for i in range(1, iterations + 1):
-        l, r = np.roll(bg, i), np.roll(bg, -i)
-        l[:i], r[-i:] = bg[:i], bg[-i:]
+        l = np.roll(bg, i)
+        l[:i] = bg[0]          # edge-clamp слева: используем крайнее левое значение
+        r = np.roll(bg, -i)
+        r[n - i:] = bg[-1]     # edge-clamp справа: используем крайнее правое значение
         bg = np.minimum(bg, (l + r) / 2)
-    return bg**2 - 1
+    return bg ** 2 - 1
 
-def gaussian(x, a, x0, sigma, offset):
-    return a * np.exp(-(x - x0)**2 / (2 * sigma**2)) + offset
 
-def pseudo_voigt(x, a, x0, sigma, eta, offset):
+def pseudo_voigt(x, a, x0, hwhm, eta, offset):
     """
-    Псевдо-Фойгт: линейная комбинация Гаусса и Лоренца.
-    sigma здесь - это HWHM (полуширина на полувысоте).
-    eta - доля Лоренца (от 0 до 1).
+    Псевдо-Фойгт: линейная комбинация Гаусса и Лоренца
+    с единым параметром ширины hwhm (HWHM = FWHM/2).
+
+    Параметры
+    ---------
+    x      : массив углов 2θ
+    a      : амплитуда
+    x0     : положение центра пика
+    hwhm   : полуширина на полувысоте (HWHM = FWHM/2), в градусах 2θ.
+             Для Гауссовой части: exp(-ln2 * ((x-x0)/hwhm)²) → HWHM = hwhm  ✓
+             Для Лоренцевой части: 1/(1+((x-x0)/hwhm)²)     → HWHM = hwhm  ✓
+             Поэтому FWHM профиля = 2·hwhm при любом eta.
+    eta    : доля Лоренцевой компоненты (0 = чистый Гаусс, 1 = чистый Лоренц).
+    offset : постоянный фоновый сдвиг.
+
+    Примечание: это стандартная форма PV с единым HWHM (Thompson et al., 1987).
+    Не путать с нотацией scipy.stats.norm, где sigma — стандартное отклонение ≠ HWHM.
     """
-    # Гауссова часть
-    g = np.exp(-np.log(2) * ((x - x0) / sigma)**2)
-    # Лоренцева часть
-    l = 1 / (1 + ((x - x0) / sigma)**2)
-    return a * (eta * l + (1 - eta) * g) + offset
+    g = np.exp(-np.log(2) * ((x - x0) / hwhm) ** 2)   # Гауссова компонента
+    l = 1.0 / (1.0 + ((x - x0) / hwhm) ** 2)           # Лоренцева компонента
+    return a * (eta * l + (1.0 - eta) * g) + offset
 
 @st.cache_data(show_spinner=False)
-def get_theoretical_patterns(phases_list, _api_key):
+def get_theoretical_patterns(phases_list, _api_key, calc_wavelength="CuKa"):
     if not _api_key or not phases_list: 
         return {}, []
     
@@ -106,7 +131,7 @@ def get_theoretical_patterns(phases_list, _api_key):
                         except:
                             conventional_structure = doc.structure # Если сбой, берем как есть
                         
-                        calc = XRDCalculator(wavelength='CuKa')
+                        calc = XRDCalculator(wavelength=calc_wavelength)
                         pattern = calc.get_pattern(conventional_structure)
                         
                         # --- ВОЗВРАЩАЕМ ИЗВЛЕЧЕНИЕ HKL (для вкладки Шеррера) ---
@@ -137,34 +162,6 @@ def get_theoretical_patterns(phases_list, _api_key):
         return {}, [f"Ошибка авторизации MP: {str(e)}"]
 
 
-def get_k_factor(hkl_tuple, crystal_system):
-    """
-    Вычисляет K. Для кубической системы используется формула формы.
-    Для остальных — стандарт 0.94.
-    """
-    if not hkl_tuple or hkl_tuple == (0, 0, 0):
-        return 0.94
-
-    if crystal_system.lower() == "cubic":
-        try:
-            # Сортируем h >= k >= l
-            h, k, l = sorted([abs(x) for x in hkl_tuple], reverse=True)
-            sum_sq = h**2 + k**2 + l**2
-            
-            if sum_sq == 0: return 0.94
-            
-            numerator = 6 * (h**3)
-            denominator = np.sqrt(sum_sq) * (6*(h**2) - 2*h*k + k*l - 2*h*l)
-            
-            if denominator == 0: return 0.94
-            
-            k_val = numerator / denominator
-            # Ограничиваем разумными пределами, чтобы не было выбросов
-            return round(np.clip(k_val, 0.5, 1.5), 3)
-        except:
-            return 0.94
-    
-    return 0.94
     
 # --- ИНТЕРФЕЙС ---
 
@@ -179,16 +176,41 @@ snip_iter = st.sidebar.slider("Агрессивность фона (SNIP)", 1, 1
 phases_to_find = st.sidebar.text_input("Фазы (формулы через запятую)", "Ag, Ag2O", help="Пример: TiO2, Rutile, Anatase (если база поддерживает имена)")
 b_inst = st.sidebar.number_input("Приборное уширение (deg 2θ)", value=0.05, min_value=0.000, format="%.3f")
 
-st.sidebar.subheader("Параметры Шеррера")
-k_mode = st.sidebar.radio(
-    "Режим K-фактора:", 
-    ["Умный (hkl-based)", "Ручной слайдер"],
-    help="Умный режим считает K для каждого пика кубической фазы отдельно на основе индексов Миллера."
+st.sidebar.subheader("Параметры Шеррера / Вильямсона-Холла")
+manual_k = st.sidebar.slider(
+    "K-фактор Шеррера",
+    min_value=0.5, max_value=1.5, value=0.89, step=0.01,
+    help=(
+        "K = 0.89 — стандартное значение для FWHM и сферических кристаллитов "
+        "(Паттерсон, 1939; Клуг & Александер).\n\n"
+        "K = 0.94 соответствует **интегральной ширине β**, а не FWHM — "
+        "не используйте его с шириной из фита пика.\n\n"
+        "Используется как в формуле Шеррера, так и для D_WH."
+    )
 )
 
-manual_k = 0.94
-if k_mode == "Ручной слайдер":
-    manual_k = st.sidebar.slider("Значение K", 0.5, 1.5, 0.94, 0.01)
+# --- ДЛИНА ВОЛНЫ ---
+# Ключ: отображаемое имя → (строка для XRDCalculator, длина волны в нм)
+WAVELENGTH_OPTIONS = {
+    "CuKα (avg. α1+α2, λ=1.5418 Å) — Ni-фильтр": ("CuKa",  0.15418),
+    "CuKα1 (λ=1.5406 Å) — Ge-монохроматор":        ("CuKa1", 0.15406),
+    "CuKα2 (λ=1.5444 Å)":                           ("CuKa2", 0.15444),
+    "MoKα1 (λ=0.7093 Å)":                           ("MoKa1", 0.07093),
+    "CoKα1 (λ=1.7889 Å)":                           ("CoKa1", 0.17889),
+    "CrKα1 (λ=2.2897 Å)":                           ("CrKa1", 0.22897),
+    "FeKα1 (λ=1.9373 Å)":                           ("FeKa1", 0.19373),
+}
+selected_wl_label = st.sidebar.selectbox(
+    "Излучение (анод/монохроматор)",
+    list(WAVELENGTH_OPTIONS.keys()),
+    index=0,
+    help=(
+        "**Ni-фильтр** (как на вашем DIF TDXRD CSC) подавляет CuKβ, но "
+        "НЕ разделяет Kα1/Kα2 → используйте взвешенное среднее CuKα.\n\n"
+        "**Ge-монохроматор** даёт чистый CuKα1 (λ=1.5406 Å)."
+    )
+)
+CALC_WAVELENGTH, LAMBDA_NM = WAVELENGTH_OPTIONS[selected_wl_label]
 
 norm_data = st.sidebar.checkbox("Нормировать интенсивность", value=True, help="Приводит максимальный пик к 100 единицам.")
 dpi_val = st.sidebar.selectbox("DPI сохранения графиков", [300, 600])
@@ -199,22 +221,49 @@ if uploaded_files:
     # --- ЧТЕНИЕ ДАННЫХ ---
     for f in uploaded_files:
         try:
-            # Читаем содержимое, чтобы проверить десятичные запятые
             content = f.read().decode('utf-8', errors='ignore')
-            f.seek(0) # Сброс указателя после чтения
             file_display_name = os.path.splitext(f.name)[0]
-            # Авто-замена запятой на точку, если она используется как десятичный разделитель
-            if "," in content and "." not in content:
-                # Читаем как строку, заменяем, потом в DataFrame
-                df = pd.read_csv(io.StringIO(content.replace(',', '.')), sep=r'\s+', 
-                                 names=['2theta', 'intensity'], comment='#', engine='python')
+
+            # --- Определяем формат числовых данных ---
+            # Берём первые непустые строки без комментариев для анализа
+            sample_lines = [
+                ln.strip() for ln in content.splitlines()
+                if ln.strip() and not ln.strip().startswith('#')
+            ][:10]
+
+            # Проверяем: является ли запятая десятичным разделителем.
+            # Признак: в строке есть паттерн \d,\d (запятая внутри числа),
+            # И при этом нет точки как десятичного разделителя (\d\.\d).
+            has_decimal_comma = any(
+                re.search(r'\d,\d', ln) for ln in sample_lines
+            )
+            has_decimal_dot = any(
+                re.search(r'\d\.\d', ln) for ln in sample_lines
+            )
+
+            if has_decimal_comma and not has_decimal_dot:
+                # Европейский формат: "20,345  1000,5" или "20,345;1000,5"
+                # Заменяем десятичную запятую на точку, затем читаем с пробельным/;-разделителем
+                fixed = content.replace(',', '.')
+                df = pd.read_csv(
+                    io.StringIO(fixed),
+                    sep=r'[\s\t;]+',
+                    names=['2theta', 'intensity'],
+                    comment='#',
+                    usecols=[0, 1],
+                    engine='python'
+                )
             else:
-                # Стандартное чтение
-                df = pd.read_csv(f, sep=r'[,\s\t;]+', # Поддержка любых разделителей
-                                 names=['2theta', 'intensity'], 
-                                 comment='#', 
-                                 usecols=[0, 1], # Берем только первые две колонки
-                                 engine='python')
+                # Стандартный формат: точка как десятичный разделитель,
+                # разделитель столбцов — пробел/таб/точка с запятой/запятая
+                df = pd.read_csv(
+                    io.StringIO(content),
+                    sep=r'[,\s\t;]+',
+                    names=['2theta', 'intensity'],
+                    comment='#',
+                    usecols=[0, 1],
+                    engine='python'
+                )
             
             # Принудительная конвертация и очистка
             df['2theta'] = pd.to_numeric(df['2theta'], errors='coerce')
@@ -249,7 +298,7 @@ if uploaded_files:
 
     # --- ВЫЗОВ В ИНТЕРФЕЙСЕ ---
     with st.spinner("Загрузка кристаллографических данных..."):
-        ref_data, fetch_warnings = get_theoretical_patterns(phases_to_find, API_KEY)
+        ref_data, fetch_warnings = get_theoretical_patterns(phases_to_find, API_KEY, CALC_WAVELENGTH)
     
     # Показываем предупреждения, если они есть
     for warn in fetch_warnings:
@@ -294,7 +343,7 @@ if uploaded_files:
             ax1.plot(df_target['2theta'], df_target[int_col], color='gray', alpha=0.5, label='Original Data', lw=1)
             ax1.plot(df_target['2theta'], df_target[bg_col], 'r--', label='SNIP Background', lw=1.5)
             
-            ax1.set_xlabel(r"$2\theta$ (deg.)")
+            ax1.set_xlabel("2θ (deg.)")
             ax1.set_ylabel("Intensity (a.u.)")
             ax1.grid(True, alpha=0.3)
             ax1.legend(frameon=True, facecolor='white', framealpha=0.8)
@@ -324,7 +373,7 @@ if uploaded_files:
                     ax2.vlines(patt.x[mask], -max_net*0.02, patt.y[mask] * (max_net / 100) * stick_scale, 
                               colors=f"C{i}", label=f"Ref: {clean_name}", lw=1.5, alpha=0.7)
             
-            ax2.set_xlabel(r"$2\theta$ (deg.)")
+            ax2.set_xlabel("2θ (deg.)")
             ax2.set_ylabel("Net Intensity (a.u.)")
             ax2.set_ylim(-max_net*0.05, max_net * 1.15) # Запас сверху для легенды
             ax2.set_xlim(df_target['2theta'].min(), df_target['2theta'].max())
@@ -409,7 +458,7 @@ if uploaded_files:
                           fontsize=9, fontweight='bold', zorder=i*2+2, va='bottom')
 
         # Настройка осей
-        ax_water.set_xlabel(r"$2\theta$ (deg.)", fontsize=12)
+        ax_water.set_xlabel("2θ (deg.)", fontsize=12)
         ax_water.set_ylabel("Normalized Intensity + Offset", fontsize=12)
         ax_water.set_xlim(float(min_2t), float(max_2t))
         ax_water.set_ylim(-0.1, total_max_offset + 1.2)
@@ -440,7 +489,11 @@ if uploaded_files:
             st.info("👈 Выберите фазы в боковой панели для расчета ОКР.")
         else:
             st.subheader("📊 Расчет ОКР (метод Шеррера + Pseudo-Voigt)")
-            st.markdown(f"**Параметры:** $\lambda=1.5406 \\AA$, $K={k_mode}$, $B_{{inst}}={b_inst}^\circ$")
+            st.markdown(
+                f"**Параметры:** $\\lambda={LAMBDA_NM*10:.4f}\\,\\AA$ "
+                f"(`{CALC_WAVELENGTH}`),  $K={manual_k}$,  "
+                f"$B_{{\\mathrm{{inst}}}}={b_inst}^\\circ$"
+            )
             
             all_results = []
             progress_bar = st.progress(0)
@@ -530,35 +583,37 @@ if uploaded_files:
                         ss_tot = np.sum((y_fit - np.mean(y_fit)) ** 2)
                         r_sq = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
                         
-                        amp, center, hwhm, eta, offset = popt
-                        fwhm_obs = 2 * hwhm # Для Псевдо-Фойгта в моей реализации sigma - это HWHM
+                        amp, center, hwhm_fit, eta, offset = popt
+                        fwhm_obs = 2.0 * hwhm_fit   # FWHM = 2·HWHM при любом eta
+
+                        fwhm_G_lim = np.sqrt(max(fwhm_obs ** 2 - b_inst ** 2, 0.0))
+                        fwhm_L_lim = max(fwhm_obs - b_inst, 0.0)
+                        fwhm_corr  = (1.0 - eta) * fwhm_G_lim + eta * fwhm_L_lim
+
+                        if fwhm_corr < 1e-4:
+                            continue
+
+                        beta_rad  = np.radians(fwhm_corr)
+                        theta_rad = np.radians(center / 2.0)
+
+                        # Формула Шеррера — K задаётся пользователем (λ в нм → D в нм)
+                        size_nm = (manual_k * LAMBDA_NM) / (beta_rad * np.cos(theta_rad))
                         
-                        if fwhm_obs > b_inst:
-                            # Коррекция на приборное уширение
-                            # Для Псевдо-Фойгта часто используют усредненную схему:
-                            # Гауссова часть корректируется квадратично, Лоренцева - линейно.
-                            # Но стандартно для Шеррера:
-                            fwhm_corr = np.sqrt(fwhm_obs**2 - b_inst**2)
-                            
-                            current_k = get_k_factor(hkl_tuple, p_info["system"]) if k_mode == "Умный (hkl-based)" else manual_k
-                            
-                            beta_rad = np.radians(fwhm_corr)
-                            theta_rad = np.radians(center / 2)
-                            
-                            # Формула Шеррера
-                            size_nm = (current_k * 0.15406) / (beta_rad * np.cos(theta_rad))
-                            
-                            if 0.5 < size_nm < 500: # Отсеиваем нереалистичные значения
-                                all_results.append({
-                                    "Образец": f_name, 
-                                    "Фаза": f"{p_name.split('|')[0]}", 
-                                    "hkl": "".join(map(str, hkl_tuple)),
-                                    "2θ": round(center, 3),
-                                    "FWHM (°)": round(fwhm_obs, 4),
-                                    "L-доля (η)": round(eta, 2),
-                                    "Размер (nm)": round(size_nm, 1),
-                                    "R²": round(r_sq, 4) 
-                                })
+                        if 0.5 < size_nm < 500:
+                            all_results.append({
+                                "Образец":         f_name,
+                                "Фаза":            f"{p_name.split('|')[0]}",
+                                "hkl":             "".join(map(str, hkl_tuple)),
+                                "2θ":              round(center,       3),
+                                "FWHM_obs (°)":    round(fwhm_obs,     4),
+                                "fG_lim (°)":      round(fwhm_G_lim,   4),
+                                "fL_lim (°)":      round(fwhm_L_lim,   4),
+                                "FWHM_corr (°)":   round(fwhm_corr,    4),
+                                "η (L-доля)":      round(eta,          2),
+                                "K":               round(manual_k,     2),
+                                "Размер (nm)":     round(size_nm,      1),
+                                "R²":              round(r_sq,         4),
+                            })
                     except Exception:
                         continue
             
@@ -569,9 +624,19 @@ if uploaded_files:
                 
                 # Вывод основной таблицы
                 st.write("### 📋 Результаты фитирования пиков")
-                st.dataframe(res_df.style.format({"2θ": "{:.2f}", "FWHM (°)": "{:.3f}", "Размер (nm)": "{:.1f}"})
-                             .background_gradient(subset=['Размер (nm)'], cmap="Greens_r"), 
-                             use_container_width=True)
+                st.dataframe(
+                    res_df.style
+                    .format({
+                        "2θ":            "{:.2f}",
+                        "FWHM_obs (°)":  "{:.4f}",
+                        "fG_lim (°)":    "{:.4f}",
+                        "fL_lim (°)":    "{:.4f}",
+                        "FWHM_corr (°)": "{:.4f}",
+                        "Размер (nm)":   "{:.1f}",
+                    })
+                    .background_gradient(subset=["Размер (nm)"], cmap="Greens_r"),
+                    use_container_width=True,
+                )
                 
                 # Сводная таблица по образцам
                 st.write("### 🏛️ Сводка по образцам (среднее ОКР)")
@@ -579,9 +644,302 @@ if uploaded_files:
                 summary.columns = ['Средний размер (nm)', 'СКО (±nm)', 'Кол-во пиков']
                 st.table(summary)
 
-                # Скачивание
+                # Скачивание таблицы Шеррера
                 csv = res_df.to_csv(index=False).encode('utf-8')
-                st.download_button("📂 Экспорт результатов в CSV", csv, "XRD_Scherrer_Analysis.csv", "text/csv")
+                st.download_button("📂 Экспорт результатов Шеррера в CSV", csv, "XRD_Scherrer_Analysis.csv", "text/csv")
+
+                # ================================================================
+                # --- WILLIAMSON-HALL ANALYSIS ---
+                # ================================================================
+                st.divider()
+                st.write("### 📐 Анализ Вильямсона-Холла")
+                st.markdown(
+                    r"""
+                    **Уравнение:** $\beta\cos\theta = \dfrac{K\lambda}{D} + 4\varepsilon\sin\theta$  
+                    Строим $\beta\cos\theta$ vs $4\sin\theta$: **наклон → ε** (микронапряжения),
+                    **пересечение → D\_WH** (размер ОКР, независимый от Шеррера).  
+                    Точки окрашены по R² их пикового фита. Серые — исключены из регрессии.
+                    """
+                )
+
+                # Группируем по (Образец, Фаза) — для каждой пары нужен свой WH-график
+                wh_groups = {}
+                for row in all_results:
+                    key = (row["Образец"], row["Фаза"].strip())
+                    wh_groups.setdefault(key, []).append(row)
+
+                # Только группы с ≥3 точками имеют смысл для регрессии
+                valid_wh = {k: v for k, v in wh_groups.items() if len(v) >= 3}
+
+                if not valid_wh:
+                    st.info(
+                        "Для анализа ВХ нужно ≥ 3 отфитированных пика на (образец, фаза). "
+                        "Убедитесь, что в диапазоне 2θ присутствуют несколько рефлексов выбранной фазы."
+                    )
+                else:
+                    group_labels_wh = [f"{s}  |  {p}" for s, p in valid_wh.keys()]
+                    sel_wh_label = st.selectbox(
+                        "Образец и фаза для ВХ-анализа:",
+                        group_labels_wh,
+                        key="wh_group_select"
+                    )
+                    sel_wh_key = list(valid_wh.keys())[group_labels_wh.index(sel_wh_label)]
+                    group_rows_wh = valid_wh[sel_wh_key]
+
+                    # --- Вычисляем ВХ-координаты ---
+                    wh_points = []
+                    for row in group_rows_wh:
+                        theta_rad = np.radians(row["2θ"] / 2.0)
+                        beta_rad  = np.radians(row["FWHM_corr (°)"])
+                        wh_points.append({
+                            "hkl":              row["hkl"],
+                            "2θ":               row["2θ"],
+                            "x_wh":             4.0 * np.sin(theta_rad),     # 4sinθ [безразм.]
+                            "y_wh":             beta_rad * np.cos(theta_rad), # β·cosθ [рад]
+                            "R²_пика":          row["R²"],
+                            "FWHM_corr (°)":    row["FWHM_corr (°)"],
+                            "Размер_Шеррер nm": row["Размер (nm)"],
+                        })
+                    wh_df = pd.DataFrame(wh_points)
+
+                    # --- Мультиселект для исключения выбросов ---
+                    hkl_option_labels = [
+                        f"{r['hkl']}  (2θ = {r['2θ']:.2f}°,  R² = {r['R²_пика']:.3f})"
+                        for _, r in wh_df.iterrows()
+                    ]
+                    # Предлагаем исключить пики с R² < 0.97 по умолчанию
+                    bad_default = [
+                        lbl for lbl, (_, r) in zip(hkl_option_labels, wh_df.iterrows())
+                        if r["R²_пика"] < 0.97
+                    ]
+                    excluded_wh = st.multiselect(
+                        "Исключить рефлексы из регрессии (выбросы, перекрытия, низкий R²):",
+                        options=hkl_option_labels,
+                        default=bad_default,
+                        key="wh_exclude_ms",
+                        help=(
+                            "Стандартная практика: убирают пики с плохим R² фита, "
+                            "перекрывающиеся рефлексы и явные выбросы от линии регрессии. "
+                            "По умолчанию предложены пики с R² < 0.97."
+                        )
+                    )
+                    include_mask = [lbl not in excluded_wh for lbl in hkl_option_labels]
+                    wh_df["included"] = include_mask
+                    wh_inc = wh_df[wh_df["included"]]
+                    wh_excl = wh_df[~wh_df["included"]]
+
+                    if len(wh_inc) < 2:
+                        st.warning("⚠️ Нужно минимум 2 включённые точки для регрессии.")
+                    else:
+                        x_inc = wh_inc["x_wh"].values
+                        y_inc = wh_inc["y_wh"].values
+
+                        # --- Линейная регрессия ---
+                        slope_wh, intercept_wh, r_val_wh, _, std_err_wh = (
+                            scipy_stats.linregress(x_inc, y_inc)
+                        )
+                        r_sq_wh = r_val_wh ** 2
+                        n_wh    = len(x_inc)
+                        x_mean_wh = np.mean(x_inc)
+                        ss_x_wh   = np.sum((x_inc - x_mean_wh) ** 2)
+
+                        # 95% доверительный интервал
+                        t_crit = scipy_stats.t.ppf(0.975, df=max(n_wh - 2, 1))
+                        ci_slope_wh = t_crit * std_err_wh
+
+                        # SE для свободного члена (intercept).
+                        # std_err_wh из linregress = SE(slope) = S / sqrt(SS_x),
+                        # поэтому S = std_err_wh · sqrt(SS_x).
+                        # SE(intercept) = S · sqrt(Σxi² / (n · SS_x))
+                        #               = std_err_wh · sqrt(SS_x) · sqrt(Σxi² / (n · SS_x))
+                        #               = std_err_wh · sqrt(Σxi² / n)
+                        se_intercept_wh = (
+                            std_err_wh * np.sqrt(np.sum(x_inc ** 2) / n_wh)
+                            if ss_x_wh > 1e-12 else 0.0
+                        )
+                        ci_intercept_wh = t_crit * se_intercept_wh
+
+                        # --- Физические величины ---
+                        # intercept = K·λ / D  →  D = K·λ / intercept
+                        # Используется тот же K, что задан пользователем для Шеррера.
+                        d_wh_warning = None
+
+                        if intercept_wh <= 0:
+                            D_wh = D_wh_ci = float("nan")
+                            if slope_wh > 0:
+                                d_wh_warning = (
+                                    "Пересечение линии регрессии с осью Y ≤ 0. "
+                                    "Это физически означает D → ∞. Возможные причины: "
+                                    "слишком мало рефлексов, узкий угловой диапазон, "
+                                    "или b_inst завышен (скорректированные FWHM близки к нулю). "
+                                    "Попробуйте уменьшить приборное уширение или добавить "
+                                    "высокоугловые рефлексы."
+                                )
+                            else:
+                                d_wh_warning = (
+                                    "Линия регрессии имеет отрицательное пересечение с осью Y "
+                                    "(intercept < 0). Это может означать: систематическую ошибку "
+                                    "в b_inst, перекрытие пиков, или что выборка рефлексов "
+                                    "не представительна. Проверьте исключённые точки."
+                                )
+                        elif intercept_wh < 1e-7:
+                            D_wh = D_wh_ci = float("nan")
+                            d_wh_warning = (
+                                "Пересечение слишком мало (< 1e-7 рад) — "
+                                "D_WH > 10 мкм, вне разумного диапазона метода Шеррера."
+                            )
+                        else:
+                            D_wh = manual_k * LAMBDA_NM / intercept_wh
+                            # δD/D = δ(intercept)/intercept  → δD = D · (ci_intercept/intercept)
+                            D_wh_ci = D_wh * (ci_intercept_wh / intercept_wh)
+
+                        eps_wh    = slope_wh       # микронапряжения (безразмерные)
+                        eps_wh_ci = ci_slope_wh
+
+                        # --- График ---
+                        fig_wh, ax_wh = plt.subplots(figsize=(7, 5))
+
+                        # Исключённые точки (серые)
+                        if len(wh_excl) > 0:
+                            ax_wh.scatter(
+                                wh_excl["x_wh"], wh_excl["y_wh"],
+                                color="lightgray", edgecolors="gray", s=70,
+                                zorder=3, label="Исключены"
+                            )
+                            for _, row in wh_excl.iterrows():
+                                ax_wh.annotate(
+                                    row["hkl"], (row["x_wh"], row["y_wh"]),
+                                    textcoords="offset points", xytext=(6, 4),
+                                    fontsize=9, color="gray"
+                                )
+
+                        # Включённые точки (цвет по R²)
+                        sc = ax_wh.scatter(
+                            wh_inc["x_wh"], wh_inc["y_wh"],
+                            c=wh_inc["R²_пика"], cmap="RdYlGn",
+                            vmin=0.90, vmax=1.00,
+                            s=90, zorder=4, edgecolors="black", linewidths=0.5,
+                            label="Включены в регрессию"
+                        )
+                        plt.colorbar(sc, ax=ax_wh, label="R² пикового фита", shrink=0.75)
+                        for _, row in wh_inc.iterrows():
+                            ax_wh.annotate(
+                                row["hkl"], (row["x_wh"], row["y_wh"]),
+                                textcoords="offset points", xytext=(6, 4), fontsize=9
+                            )
+
+                        # Линия регрессии + доверительный интервал
+                        x_line = np.linspace(
+                            wh_df["x_wh"].min() * 0.90,
+                            wh_df["x_wh"].max() * 1.10, 300
+                        )
+                        y_line = intercept_wh + slope_wh * x_line
+                        ax_wh.plot(x_line, y_line, "r-", lw=1.8, zorder=5,
+                                   label=(
+                                       rf"ВХ-регрессия  ($R^2$={r_sq_wh:.4f})"
+                                       f"\nε = {eps_wh:.4f} ± {eps_wh_ci:.4f}"
+                                       f"\n$D_{{WH}}$ = {D_wh:.1f} ± {D_wh_ci:.1f} nm"
+                                   ))
+
+                        if ss_x_wh > 1e-12:
+                            y_ci_band = t_crit * std_err_wh * np.sqrt(
+                                1.0 / n_wh + (x_line - x_mean_wh) ** 2 / ss_x_wh
+                            )
+                            ax_wh.fill_between(
+                                x_line, y_line - y_ci_band, y_line + y_ci_band,
+                                alpha=0.15, color="red", label="95% ДИ"
+                            )
+
+                        ax_wh.set_xlabel("4·sin θ", fontsize=13)
+                        ax_wh.set_ylabel("β·cos θ  (rad)", fontsize=13)
+                        ax_wh.set_title(
+                            f"Вильямсон–Холл:  {sel_wh_key[0]}  |  {sel_wh_key[1]}",
+                            fontsize=11
+                        )
+                        ax_wh.legend(fontsize=9, frameon=True, facecolor="white",
+                                     loc="upper left")
+                        ax_wh.grid(True, alpha=0.3)
+                        plt.tight_layout()
+
+                        # --- Вывод ---
+                        col_wh_plot, col_wh_res = st.columns([3, 2])
+                        with col_wh_plot:
+                            st.pyplot(fig_wh)
+
+                        with col_wh_res:
+                            st.markdown("#### 📊 Результаты ВХ")
+
+                            if d_wh_warning:
+                                st.error(f"**D_WH недоступен:** {d_wh_warning}")
+
+                            st.metric(
+                                "Размер D_WH (nm)",
+                                f"{D_wh:.1f}" if not np.isnan(D_wh) else "—",
+                                delta=f"± {D_wh_ci:.1f} nm" if not np.isnan(D_wh_ci) else None,
+                                delta_color="off"
+                            )
+                            st.metric(
+                                "Микронапряжения ε",
+                                f"{eps_wh:.5f}",
+                                delta=f"± {eps_wh_ci:.5f}",
+                                delta_color="off"
+                            )
+                            st.metric(
+                                "ε × 10⁻³",
+                                f"{eps_wh * 1e3:.3f}",
+                                delta=f"± {eps_wh_ci * 1e3:.3f}",
+                                delta_color="off"
+                            )
+                            st.metric("R² регрессии", f"{r_sq_wh:.4f}")
+                            st.metric(
+                                "Точек в регрессии",
+                                f"{len(wh_inc)} / {len(wh_df)}"
+                            )
+
+                            # Физическая интерпретация знака ε
+                            if not np.isnan(eps_wh):
+                                if abs(eps_wh) < eps_wh_ci:
+                                    st.info("ℹ️ ε в пределах погрешности — микронапряжения не значимы.")
+                                elif eps_wh > 0:
+                                    st.success("✅ ε > 0: растягивающие микронапряжения.")
+                                else:
+                                    st.warning("⚠️ ε < 0: сжимающие микронапряжения (или мало точек/диапазона).")
+
+                            # Сравнение D_WH с D_Scherrer
+                            d_sherr_avg = wh_inc["Размер_Шеррер nm"].mean()
+                            if not np.isnan(D_wh) and d_sherr_avg > 0:
+                                ratio = D_wh / d_sherr_avg
+                                st.markdown(
+                                    f"**D_WH / D_Scherrer = {ratio:.2f}**  \n"
+                                    f"(D_Ш = {d_sherr_avg:.1f} nm по тем же пикам)"
+                                )
+
+                            # Экспорт ВХ-данных
+                            wh_export = wh_df[[
+                                "hkl", "2θ", "x_wh", "y_wh",
+                                "R²_пика", "FWHM_corr (°)", "included"
+                            ]].copy()
+                            wh_export.columns = [
+                                "hkl", "2theta_deg",
+                                "4sinTheta", "betaCosTheta_rad",
+                                "R2_peak", "FWHM_corr_deg", "included_in_fit"
+                            ]
+                            st.download_button(
+                                "📂 Экспорт ВХ-данных CSV",
+                                wh_export.to_csv(index=False).encode("utf-8"),
+                                "WH_data.csv", "text/csv"
+                            )
+
+                            # Экспорт графика
+                            buf_wh = io.BytesIO()
+                            fig_wh.savefig(buf_wh, format="png",
+                                           dpi=dpi_val, bbox_inches="tight")
+                            st.download_button(
+                                "🖼️ Скачать ВХ-график PNG",
+                                buf_wh.getvalue(),
+                                "WH_plot.png", "image/png"
+                            )
+                # ================================================================
             else:
                 st.error("❌ Не удалось надежно фитировать пики. Попробуйте уменьшить приборное уширение или проверьте фон.")
 
@@ -613,7 +971,6 @@ if uploaded_files:
 
             def generate_full_model(scales, x, phases_data, fwhm, eta):
                 model = np.zeros_like(x)
-                sigma = fwhm / 2.0
                 for i, p_name in enumerate(selected_phases):
                     p_info = phases_data[p_name]
                     patt = p_info["pattern"]
@@ -621,8 +978,9 @@ if uploaded_files:
                     phase_signal = np.zeros_like(x)
                     # Оптимизация: берем только значимые пики (>1% интенсивности)
                     significant = patt.y > 1.0
+                    # pseudo_voigt принимает hwhm = fwhm/2 как 3-й позиционный аргумент
                     for px, py in zip(patt.x[significant], patt.y[significant]):
-                        phase_signal += py * pseudo_voigt(x, 1.0, px, sigma, eta, 0)
+                        phase_signal += py * pseudo_voigt(x, 1.0, px, fwhm / 2.0, eta, 0)
                     model += scales[i] * phase_signal
                 return model
 
