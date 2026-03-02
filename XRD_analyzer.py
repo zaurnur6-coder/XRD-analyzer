@@ -885,7 +885,7 @@ if uploaded_files:
                                 delta_color="off"
                             )
                             st.metric(
-                                "ε × 10⁻³",
+                                "ε × 10³",
                                 f"{eps_wh * 1e3:.3f}",
                                 delta=f"± {eps_wh_ci * 1e3:.3f}",
                                 delta_color="off"
