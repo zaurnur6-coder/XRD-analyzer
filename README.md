@@ -1,5 +1,8 @@
 # Advanced XRD Batch Analyzer: Peak Profiling, CDS, and Microstrain Analysis
 
+## DOI
+[![DOI](https://zenodo.org/badge/1167201640.svg)](https://doi.org/10.5281/zenodo.18976685)
+
 ## Overview
 This comprehensive X-ray Diffraction (XRD) analysis toolkit is designed for the high-throughput processing of diffraction data. It facilitates automated background subtraction, peak deconvolution, and crystallographic parameter estimation. Specifically developed for nanocarbon and metallic composite research, this tool provides a robust, unbiased framework for calculating Crystalline Domain Size (CDS) and lattice microstrains.
 
