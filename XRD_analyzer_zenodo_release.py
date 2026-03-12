@@ -589,13 +589,13 @@ if uploaded_files:
                         if r["R²_peak"] < 0.97
                     ]
                     excluded_wh = st.multiselect(
-                        "Exclude reflexes from regression (outliers, overlaps, low R²):",
+                        "Exclude reflections from regression (outliers, overlaps, low R²):",
                         options=hkl_option_labels,
                         default=bad_default,
                         key="wh_exclude_ms",
                         help=(
                             "Standard practice: remove peaks with bad R² fit, "
-                            "overlapping reflexes and obvious outliers from the regression line. "
+                            "overlapping reflections and obvious outliers from the regression line. "
                             "By default, peaks with R² < 0.97 are suggested."
                         )
                     )
@@ -762,7 +762,7 @@ if uploaded_files:
                                 else:
                                     st.warning("⚠️ ε < 0: compressive microstresses (or few points/range).")
 
-                            d_sherr_avg = wh_inc["D_Scherrer nm"].mean()
+                            d_sherr_avg = wh_inc["Scherrer_size nm"].mean()
                             if not np.isnan(D_wh) and d_sherr_avg > 0:
                                 ratio = D_wh / d_sherr_avg
                                 st.markdown(
@@ -772,12 +772,12 @@ if uploaded_files:
 
                             wh_export = wh_df[[
                                 "hkl", "2θ", "x_wh", "y_wh",
-                                "R²_peak", "FWHM_corr (°)", "included"
+                                "R²_peak", "FWHM_corr (°)", "Scherrer_size nm", "included"
                             ]].copy()
                             wh_export.columns = [
                                 "hkl", "2theta_deg",
                                 "4sinTheta", "betaCosTheta_rad",
-                                "R2_peak", "FWHM_corr_deg", "included_in_fit"
+                                "R2_peak", "FWHM_corr_deg", "Scherrer_size_nm", "included_in_fit"
                             ]
                             st.download_button(
                                 "📂 Export to CSV",
