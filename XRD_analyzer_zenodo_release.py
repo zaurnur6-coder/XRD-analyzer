@@ -767,7 +767,7 @@ if uploaded_files:
                                 ratio = D_wh / d_sherr_avg
                                 st.markdown(
                                     f"**D_WH / D_Scherrer = {ratio:.2f}**  \n"
-                                    f"(D_Sch = {d_sherr_avg:.1f} nm for the same peaks)"
+                                    f"(D_Scherrer = {d_sherr_avg:.1f} nm for the same peaks)"
                                 )
 
                             wh_export = wh_df[[
