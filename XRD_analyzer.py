@@ -100,7 +100,7 @@ def get_theoretical_patterns(phases_list, _api_key, calc_wavelength="CuKa"):
                 try:
                     docs = mpr.materials.summary.search(
                         formula=formula, 
-                        energy_above_hull=(0, 0.3), 
+                        energy_above_hull=(0, 2.0), 
                         fields=[
                             "structure", "material_id", "symmetry", 
                             "is_stable", "energy_above_hull", "formula_pretty",
@@ -114,7 +114,7 @@ def get_theoretical_patterns(phases_list, _api_key, calc_wavelength="CuKa"):
 
                     sorted_docs = sorted(docs, key=lambda x: x.energy_above_hull)
 
-                    for doc in sorted_docs[:100]:
+                    for doc in sorted_docs:
                         e_hull = round(doc.energy_above_hull, 3)
                         st_label = "✅ Stable" if (doc.is_stable or e_hull <= 0.0) else f"⚠️ Metastable (+{e_hull} eV)"
                         
