@@ -380,6 +380,23 @@ if uploaded_files:
             ax2.grid(True, alpha=0.3, axis='x')
             ax2.legend(fontsize=9, loc='upper right', frameon=True)
             st.pyplot(fig2)
+            
+            # === ДОБАВЛЕННЫЙ КОД ДЛЯ СКАЧИВАНИЯ КАРТИНКИ ===
+            img_buffer = io.BytesIO()
+            # Сохраняем фигуру в буфер. format='png' и dpi=1200
+            # bbox_inches='tight' гарантирует, что легенда не обрежется
+            fig2.savefig(img_buffer, format='png', dpi=1200, bbox_inches='tight')
+            
+            st.download_button(
+                label="🖼️ Скачать график (PNG, 1200 dpi)",
+                data=img_buffer.getvalue(),
+                file_name=f"plot_{target}.png",
+                mime="image/png",
+            )
+            
+            # Очистка памяти от фигуры Matplotlib (хорошая практика в Streamlit)
+            plt.close(fig2)
+            # ===============================================
 
         # Дополнительная опция: Скачивание обработанных данных
         st.divider()
