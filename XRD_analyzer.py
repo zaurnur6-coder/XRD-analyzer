@@ -213,7 +213,7 @@ selected_wl_label = st.sidebar.selectbox(
 CALC_WAVELENGTH, LAMBDA_NM = WAVELENGTH_OPTIONS[selected_wl_label]
 
 norm_data = st.sidebar.checkbox("Нормировать интенсивность", value=True, help="Приводит максимальный пик к 100 единицам.")
-dpi_val = st.sidebar.selectbox("DPI сохранения графиков", [300, 600])
+dpi_val = st.sidebar.selectbox("DPI сохранения графиков", [300, 600, 900, 1200])
 
 if uploaded_files:
     all_data = {}
