@@ -114,7 +114,7 @@ def get_theoretical_patterns(phases_list, _api_key, calc_wavelength="CuKa"):
 
                     sorted_docs = sorted(docs, key=lambda x: x.energy_above_hull)
 
-                    for doc in sorted_docs[:30]:
+                    for doc in sorted_docs[:100]:
                         e_hull = round(doc.energy_above_hull, 3)
                         st_label = "✅ Stable" if (doc.is_stable or e_hull <= 0.0) else f"⚠️ Metastable (+{e_hull} eV)"
                         
