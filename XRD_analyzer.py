@@ -98,7 +98,7 @@ def get_theoretical_patterns(phases_list, _api_key, calc_wavelength="CuKa"):
         with MPRester(_api_key) as mpr:
             for formula in target_formulas:
                 try:
-                    docs = mpr.materials.summary.search(
+                    docs = mpr.summary.search(
                         formula=formula, 
                         energy_above_hull=(0, 2.0), 
                         fields=[
@@ -118,7 +118,8 @@ def get_theoretical_patterns(phases_list, _api_key, calc_wavelength="CuKa"):
                         e_hull = round(doc.energy_above_hull, 3)
                         st_label = "✅ Stable" if (doc.is_stable or e_hull <= 0.0) else f"⚠️ Metastable (+{e_hull} eV)"
                         
-                        crystal_sys = doc.symmetry.crystal_system.value
+                        # Безопасное извлечение, работающее и в старых, и в новых версиях mp-api
+                        crystal_sys = doc.symmetry.crystal_system.value if hasattr(doc.symmetry.crystal_system, 'value') else str(doc.symmetry.crystal_system)
                         space_group = doc.symmetry.symbol
                         m_id = str(doc.material_id) 
                         
