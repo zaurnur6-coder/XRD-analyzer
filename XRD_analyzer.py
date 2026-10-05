@@ -684,24 +684,54 @@ if uploaded_files:
                         # Рисуем весь спектр образца (ЯРКО: черный, непрозрачный, толщина 1.5)
                         ax_global.plot(df_target['2theta'], df_target['net'], color='black', lw=1.5, alpha=1.0, label='Experiment (Net)')
                         
-                        # Вытаскиваем короткое имя фазы для подписи (например, Fe2O3)
                         phase_short_name = sel_vis_ph.split('|')[0].strip()
                         
+                        # Сортируем фиты слева направо для алгоритма анти-наложения
+                        sorted_fits = sorted(active_fits, key=lambda x: x["center"])
+                        
+                        placed_labels = [] # Храним координаты (x, y) уже размещенных подписей
+                        min_x_dist = 2.0   # Дистанция по X (градусы), при которой считаем пики "соседями"
+                        safe_y_dist = max_net_val * 0.35 # Шаг по высоте, чтобы вертикальный текст не наезжал
+                        max_y_limit = max_net_val * 1.3  # Стартовый верхний предел оси Y
+                        
                         # Накладываем кривые фита и маркеры
-                        for f_data in active_fits:
+                        for f_data in sorted_fits:
                             hkl_str = f"({', '.join(map(str, f_data['hkl']))})"
                             label_text = f"{phase_short_name} {hkl_str}"
+                            x_center = f_data["center"]
                             
-                            # Линия фита: ВТОРОСТЕПЕННАЯ (красная, пунктирная, тонкая, полупрозрачная 50%)
-                            ax_global.plot(f_data["x"], f_data["y_fit"], color='red', linestyle='--', lw=1.2, alpha=0.5)
+                            # Линия фита (красная, пунктирная, тонкая, полупрозрачная 50%)
+                            ax_global.plot(f_data["x"], f_data["y_fit"], color='red', linestyle='--', lw=1.2, alpha=0.7)
                             
                             # Вертикальная линия по центру пика
-                            ax_global.axvline(f_data["center"], color='blue', linestyle=':', alpha=0.3)
+                            ax_global.axvline(x_center, color='blue', linestyle=':', alpha=0.3)
                             
-                            # Подпись (Фаза + hkl) над пиком
-                            text_y_pos = f_data["y_fit"].max() + (max_net_val * 0.15)
+                            # --- АЛГОРИТМ РАЗДВИЖКИ ТЕКСТА ПО ВЕРТИКАЛИ ---
+                            # Изначально хотим поставить текст чуть выше самого пика
+                            y_bottom = f_data["y_fit"].max() + (max_net_val * 0.05)
                             
-                            ax_global.text(f_data["center"], text_y_pos, 
+                            # Ищем соседние подписи, которые уже поставлены
+                            nearby_labels = [pl for pl in placed_labels if abs(x_center - pl[0]) < min_x_dist]
+                            
+                            # Поднимаем текст вверх, пока он пересекается с соседями
+                            collision = True
+                            while collision:
+                                collision = False
+                                for px, py in nearby_labels:
+                                    if abs(y_bottom - py) < safe_y_dist:
+                                        y_bottom = py + safe_y_dist
+                                        collision = True
+                                        break # Сдвинули -> проверяем всех соседей заново
+                            
+                            # Сохраняем итоговую позицию
+                            placed_labels.append((x_center, y_bottom))
+                            
+                            # Динамически увеличиваем ось Y, если текст ушел высоко в небо
+                            if y_bottom + safe_y_dist > max_y_limit:
+                                max_y_limit = y_bottom + safe_y_dist
+                                
+                            # Отрисовка подписи
+                            ax_global.text(x_center, y_bottom, 
                                            label_text, ha='center', va='bottom', fontsize=8, color='darkred', rotation=90,
                                            bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5))
                         
@@ -712,12 +742,13 @@ if uploaded_files:
                         ax_global.set_ylabel("Intensity (a.u.)")
                         ax_global.set_xlim(df_target['2theta'].min(), df_target['2theta'].max())
                         
-                        ax_global.set_ylim(-max_net_val * 0.05, max_net_val * 1.1) 
+                        # Применяем динамически рассчитанный предел оси Y
+                        ax_global.set_ylim(-max_net_val * 0.05, max_y_limit) 
                         
                         ax_global.xaxis.set_major_locator(ticker.MultipleLocator(5))
                         ax_global.xaxis.set_minor_locator(ticker.MultipleLocator(1))
                         
-                        # Фиктивные линии для легенды (с обновленными стилями)
+                        # Фиктивные линии для легенды
                         ax_global.plot([], [], color='red', linestyle='--', lw=1.2, alpha=0.5, label='Pseudo-Voigt Fits')
                         ax_global.axvline(x=0, color='blue', linestyle=':', alpha=0.3, label='Peak Centers')
                         ax_global.legend(loc='upper right', fontsize=9)
