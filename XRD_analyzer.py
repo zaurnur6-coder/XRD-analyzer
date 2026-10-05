@@ -622,7 +622,7 @@ if uploaded_files:
                             all_results.append({
                                 "Образец":         f_name,
                                 "Фаза":            f"{p_name.split('|')[0]}",
-                                "hkl":             "".join(map(str, hkl_tuple)),
+                                "hkl":             f"({', '.join(map(str, hkl_tuple))})",
                                 "2θ":              round(center,       3),
                                 "FWHM_obs (°)":    round(fwhm_obs,     4),
                                 "fG_lim (°)":      round(fwhm_G_lim,   4),
