@@ -190,6 +190,12 @@ manual_k = st.sidebar.slider(
         "Используется как в формуле Шеррера, так и для D_WH."
     )
 )
+# === ДОБАВЛЯЕМ СЛАЙДЕР ДОПУСКА ===
+max_shift = st.sidebar.slider(
+    "Макс. допустимый сдвиг пика (2θ)", 
+    0.1, 3.0, 0.5, 0.1, 
+    help="Насколько экспериментальный пик может отклоняться от теории. Увеличьте, если используете DFT-структуры (Materials Project) или у вас твердый раствор."
+)
 
 # --- ДЛИНА ВОЛНЫ ---
 # Ключ: отображаемое имя → (строка для XRDCalculator, длина волны в нм)
@@ -559,7 +565,7 @@ if uploaded_files:
                 for hkl, px, py in available_peaks:
                     # Фильтр 3: Не брать пики, которые слишком близко друг к другу 
                     # (чтобы не фитировать один и тот же широкий пик дважды)
-                    if any(abs(px - s) < 1.0 for s in seen_angles): 
+                    if any(abs(px - s) < max_shift for s in seen_angles): 
                         continue 
                         
                     seen_angles.append(px)
@@ -571,7 +577,7 @@ if uploaded_files:
 
                 # 2. Фитирование каждого пика
                 for hkl_tuple, p_theo, _ in targets:
-                    window_search = 0.7
+                    window_search = max_shift + 0.3
                     s_mask = (df['2theta'] >= p_theo - window_search) & (df['2theta'] <= p_theo + window_search)
                     
                     if not any(s_mask) or df.loc[s_mask, 'net'].max() < df['net'].max() * 0.05:
@@ -604,6 +610,10 @@ if uploaded_files:
                         r_sq = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
                         
                         amp, center, hwhm_fit, eta, offset = popt
+                        
+                            if abs(center - p_theo) > max_shift:
+                                continue
+                                
                         fwhm_obs = 2.0 * hwhm_fit   # FWHM = 2·HWHM при любом eta
 
                         fwhm_G_lim = np.sqrt(max(fwhm_obs ** 2 - b_inst ** 2, 0.0))
