@@ -611,8 +611,8 @@ if uploaded_files:
                         
                         amp, center, hwhm_fit, eta, offset = popt
                         
-                            if abs(center - p_theo) > max_shift:
-                                continue
+                        if abs(center - p_theo) > max_shift:
+                            continue
                                 
                         fwhm_obs = 2.0 * hwhm_fit   # FWHM = 2·HWHM при любом eta
 
