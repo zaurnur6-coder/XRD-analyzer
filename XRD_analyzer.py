@@ -705,13 +705,13 @@ if uploaded_files:
                         
                         # Косметика общего графика
                         import matplotlib.ticker as ticker  # Импорт для работы MultipleLocator
-                        ax_global.grid(True, which='both', linestyle=':', alpha=0.5)
+                        ax_global.grid(True, which='both', linestyle=':', alpha=0.8)
                         ax_global.set_xlabel("2θ (deg.)")
                         ax_global.set_ylabel("Intensity (a.u.)")
                         ax_global.set_xlim(df_target['2theta'].min(), df_target['2theta'].max())
                         
                         # Увеличили верхний предел до 1.4, чтобы длинные подписи поместились
-                        ax_global.set_ylim(-max_net_val * 0.05, max_net_val * 1.4) 
+                        ax_global.set_ylim(-max_net_val * 0.05, max_net_val * 1.1) 
                         
                         ax_global.xaxis.set_major_locator(ticker.MultipleLocator(5))  # Основные шаги (5, 10, 15...)
                         ax_global.xaxis.set_minor_locator(ticker.MultipleLocator(1))  # Мелкие шаги (1, 2, 3...)
