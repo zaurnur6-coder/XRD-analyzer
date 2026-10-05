@@ -514,6 +514,7 @@ if uploaded_files:
             )
             
             all_results = []
+            fit_visualizations = {} # <--- ДОБАВЛЕНО: здесь будут храниться кривые фитов
             progress_bar = st.progress(0)
             
             # Собираем задачи для расчета
@@ -632,12 +633,76 @@ if uploaded_files:
                                 "Размер (nm)":     round(size_nm,      1),
                                 "R²":              round(r_sq,         4),
                             })
+
+                            # === ДОБАВЛЕНО: Сохранение данных для отрисовки ===
+                            vis_key = (f_name, p_name)
+                            if vis_key not in fit_visualizations:
+                                fit_visualizations[vis_key] = []
+                            fit_visualizations[vis_key].append({
+                                "x": x_fit,
+                                "y": y_fit,
+                                "y_fit": y_pred,
+                                "center": center,
+                                "hkl": hkl_tuple
+                            })
+                            # ==================================================
                     except Exception:
                         continue
             
             progress_bar.empty()
             
             if all_results:
+                # ================================================================
+                # === ДОБАВЛЕНО: БЛОК ВИЗУАЛИЗАЦИИ ФИТИРОВАНИЯ (ГРАФИКИ) ===
+                # ================================================================
+                st.divider()
+                st.write("### 👁️ Визуальный контроль фитирования пиков")
+                
+                # Получаем уникальные списки образцов
+                vis_samples = list(dict.fromkeys([k[0] for k in fit_visualizations.keys()]))
+                
+                col_v1, col_v2 = st.columns(2)
+                with col_v1:
+                    sel_vis_samp = st.selectbox("Образец для проверки:", vis_samples, key="vis_samp")
+                with col_v2:
+                    vis_phases = list(dict.fromkeys([k[1] for k in fit_visualizations.keys() if k[0] == sel_vis_samp]))
+                    sel_vis_ph = st.selectbox("Фаза для проверки:", vis_phases, key="vis_ph") if vis_phases else None
+                
+                if sel_vis_samp and sel_vis_ph:
+                    active_fits = fit_visualizations.get((sel_vis_samp, sel_vis_ph), [])
+                    n_fits = len(active_fits)
+                    
+                    if n_fits > 0:
+                        cols = min(3, n_fits)
+                        rows = (n_fits + cols - 1) // cols
+                        fig_fits, axes = plt.subplots(rows, cols, figsize=(4.5 * cols, 3.5 * rows))
+                        
+                        # Обработка осей для Matplotlib (чтобы всегда был итерируемый список)
+                        if n_fits == 1: axes = [axes]
+                        else: axes = axes.flatten()
+                            
+                        for i, f_data in enumerate(active_fits):
+                            ax = axes[i]
+                            ax.plot(f_data["x"], f_data["y"], 'k.', alpha=0.5, label='Exp. Net')
+                            ax.plot(f_data["x"], f_data["y_fit"], 'r-', lw=2, label='Pseudo-Voigt Fit')
+                            
+                            hkl_str = "".join(map(str, f_data["hkl"]))
+                            ax.set_title(f"hkl: {hkl_str} | 2θ ≈ {f_data['center']:.2f}°", fontsize=11)
+                            ax.set_xlabel("2θ (deg.)", fontsize=9)
+                            ax.legend(fontsize=8, frameon=False)
+                            ax.grid(True, alpha=0.3)
+                            
+                        # Отключаем пустые ячейки (если пиков например 4 или 5)
+                        for j in range(n_fits, len(axes)):
+                            axes[j].set_visible(False)
+                            
+                        plt.tight_layout()
+                        st.pyplot(fig_fits)
+                
+                st.divider()
+                # ================================================================
+                # Конец добавленного блока
+                
                 res_df = pd.DataFrame(all_results)
                 
                 # Вывод основной таблицы
