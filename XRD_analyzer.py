@@ -675,62 +675,75 @@ if uploaded_files:
                     
                     if n_fits > 0:
                         # --- 1. ГРАФИК ОБЩЕГО ВИДА ---
+                        # --- 1. ГРАФИК ОБЩЕГО ВИДА ---
                         st.markdown("##### 🌍 Global Panorama: Experiment and Fit Zones")
                         df_target = all_data[sel_vis_samp]
                         max_net_val = df_target['net'].max()
                         
+                        # Достаем все теоретические пики выбранной фазы
+                        p_info = ref_data[sel_vis_ph]
+                        patt = p_info["pattern"]
+                        theo_hkls = p_info["hkls"]
+                        
+                        # Собираем hkl, которые удалось зафитовать, для быстрого поиска
+                        fitted_hkls = {f["hkl"] for f in active_fits}
+                        
                         fig_global, ax_global = plt.subplots(figsize=(10, 4))
                         
-                        # Рисуем весь спектр образца (ЯРКО: черный, непрозрачный, толщина 1.5)
+                        # Рисуем спектр
                         ax_global.plot(df_target['2theta'], df_target['net'], color='black', lw=1.5, alpha=1.0, label='Experiment (Net)')
                         
                         phase_short_name = sel_vis_ph.split('|')[0].strip()
-                        
-                        # Сортируем фиты слева направо для алгоритма анти-наложения
                         sorted_fits = sorted(active_fits, key=lambda x: x["center"])
                         
-                        placed_labels = [] # Храним координаты (x, y) уже размещенных подписей
-                        min_x_dist = 2.0   # Дистанция по X (градусы), при которой считаем пики "соседями"
-                        safe_y_dist = max_net_val * 0.35 # Шаг по высоте, чтобы вертикальный текст не наезжал
-                        max_y_limit = max_net_val * 1.3  # Стартовый верхний предел оси Y
+                        placed_labels = []
+                        min_x_dist = 2.0
+                        safe_y_dist = max_net_val * 0.35
+                        max_y_limit = max_net_val * 1.3
                         
-                        # Накладываем кривые фита и маркеры
+                        # Подготовка данных для таблицы
+                        table_data = []
+                        
+                        # 1. ОТРИСОВКА НЕЗАФИТОВАННЫХ ТЕОРЕТИЧЕСКИХ ПИКОВ И СБОР ТАБЛИЦЫ
+                        for px, py, phkl in zip(patt.x, patt.y, theo_hkls):
+                            # Берем только те, что в диапазоне и имеют интенсивность > 3% (как в алгоритме фита)
+                            if df_target['2theta'].min() <= px <= df_target['2theta'].max() and py >= 3.0:
+                                hkl_str_tab = f"({', '.join(map(str, phkl))})"
+                                
+                                if phkl not in fitted_hkls:
+                                    # Отрисовка линии для пропущенного пика (зеленая, штрихпунктир)
+                                    ax_global.axvline(x=px, color='green', linestyle='-.', lw=1.2, alpha=0.4)
+                                    table_data.append({"hkl": hkl_str_tab, "Теор. 2θ": round(px, 3), "Теор. Интенс. (%)": round(py, 1), "Статус": "❌ Пропущен", "Эксп. 2θ": "—"})
+                                else:
+                                    # Находим реальный центр для таблицы
+                                    fit_center = next(f["center"] for f in active_fits if f["hkl"] == phkl)
+                                    table_data.append({"hkl": hkl_str_tab, "Теор. 2θ": round(px, 3), "Теор. Интенс. (%)": round(py, 1), "Статус": "✅ Зафитован", "Эксп. 2θ": round(fit_center, 3)})
+
+                        # 2. ОТРИСОВКА ЗАФИТОВАННЫХ ПИКОВ
                         for f_data in sorted_fits:
                             hkl_str = f"({', '.join(map(str, f_data['hkl']))})"
                             label_text = f"{phase_short_name} {hkl_str}"
                             x_center = f_data["center"]
                             
-                            # Линия фита (красная, пунктирная, тонкая, полупрозрачная 50%)
-                            ax_global.plot(f_data["x"], f_data["y_fit"], color='red', linestyle='--', lw=1.2, alpha=0.7)
-                            
-                            # Вертикальная линия по центру пика
+                            ax_global.plot(f_data["x"], f_data["y_fit"], color='red', linestyle='--', lw=1.2, alpha=0.5)
                             ax_global.axvline(x_center, color='blue', linestyle=':', alpha=0.3)
                             
-                            # --- АЛГОРИТМ РАЗДВИЖКИ ТЕКСТА ПО ВЕРТИКАЛИ ---
-                            # Изначально хотим поставить текст чуть выше самого пика
                             y_bottom = f_data["y_fit"].max() + (max_net_val * 0.05)
-                            
-                            # Ищем соседние подписи, которые уже поставлены
                             nearby_labels = [pl for pl in placed_labels if abs(x_center - pl[0]) < min_x_dist]
                             
-                            # Поднимаем текст вверх, пока он пересекается с соседями
                             collision = True
                             while collision:
                                 collision = False
-                                for px, py in nearby_labels:
-                                    if abs(y_bottom - py) < safe_y_dist:
-                                        y_bottom = py + safe_y_dist
+                                for px_lab, py_lab in nearby_labels:
+                                    if abs(y_bottom - py_lab) < safe_y_dist:
+                                        y_bottom = py_lab + safe_y_dist
                                         collision = True
-                                        break # Сдвинули -> проверяем всех соседей заново
+                                        break
                             
-                            # Сохраняем итоговую позицию
                             placed_labels.append((x_center, y_bottom))
-                            
-                            # Динамически увеличиваем ось Y, если текст ушел высоко в небо
                             if y_bottom + safe_y_dist > max_y_limit:
                                 max_y_limit = y_bottom + safe_y_dist
                                 
-                            # Отрисовка подписи
                             ax_global.text(x_center, y_bottom, 
                                            label_text, ha='center', va='bottom', fontsize=8, color='darkred', rotation=90,
                                            bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5))
@@ -741,19 +754,18 @@ if uploaded_files:
                         ax_global.set_xlabel("2θ (deg.)")
                         ax_global.set_ylabel("Intensity (a.u.)")
                         ax_global.set_xlim(df_target['2theta'].min(), df_target['2theta'].max())
-                        
-                        # Применяем динамически рассчитанный предел оси Y
                         ax_global.set_ylim(-max_net_val * 0.05, max_y_limit) 
-                        
                         ax_global.xaxis.set_major_locator(ticker.MultipleLocator(5))
                         ax_global.xaxis.set_minor_locator(ticker.MultipleLocator(1))
                         
                         # Фиктивные линии для легенды
                         ax_global.plot([], [], color='red', linestyle='--', lw=1.2, alpha=0.5, label='Pseudo-Voigt Fits')
-                        ax_global.axvline(x=0, color='blue', linestyle=':', alpha=0.3, label='Peak Centers')
+                        ax_global.axvline(x=0, color='blue', linestyle=':', alpha=0.3, label='Fitted Peak Centers')
+                        ax_global.axvline(x=0, color='green', linestyle='-.', lw=1.2, alpha=0.4, label='Unfitted Theo. Peaks')
                         ax_global.legend(loc='upper right', fontsize=9)
                         
                         st.pyplot(fig_global)
+                        
                         # --- КНОПКА СОХРАНЕНИЯ ОБЩЕГО ГРАФИКА ---
                         img_buf_global = io.BytesIO()
                         fig_global.savefig(img_buf_global, format='png', dpi=dpi_val, bbox_inches='tight')
@@ -763,7 +775,22 @@ if uploaded_files:
                             file_name=f"global_fit_{sel_vis_samp}_{phase_short_name}.png",
                             mime="image/png"
                         )
-                        # ----------------------------------------
+                        
+                        # --- ТАБЛИЦА РЕФЛЕКСОВ ---
+                        st.markdown(f"**Статус рефлексов фазы {phase_short_name} (Интенсивность > 3%)**")
+                        if table_data:
+                            # Сортируем таблицу по теоретическому углу 2θ
+                            df_peaks_status = pd.DataFrame(table_data).sort_values("Теор. 2θ").reset_index(drop=True)
+                            
+                            # Подсвечиваем пропущенные красным, зафитованные зеленым
+                            def highlight_status(val):
+                                if "✅" in str(val): return 'color: green; font-weight: bold'
+                                elif "❌" in str(val): return 'color: red'
+                                return ''
+                                
+                            st.dataframe(df_peaks_status.style.applymap(highlight_status, subset=['Статус']), use_container_width=True)
+                        else:
+                            st.info("Нет теоретических рефлексов в данном диапазоне 2θ.")
                         
                         # --- 2. ПЛИТКА ДЕТАЛЬНЫХ ГРАФИКОВ ---
                         st.markdown("##### 🔎 Детальный вид отдельных рефлексов")
