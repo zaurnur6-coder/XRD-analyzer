@@ -10,6 +10,7 @@ from scipy import stats as scipy_stats
 from mp_api.client import MPRester
 from pymatgen.analysis.diffraction.xrd import XRDCalculator
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from pymatgen.core import Structure
 import matplotlib.ticker as ticker
 
 # --- НАСТРОЙКИ СТИЛЯ ---
@@ -174,6 +175,14 @@ uploaded_files = st.sidebar.file_uploader(
     accept_multiple_files=True
 )
 
+st.sidebar.subheader("📂 Локальные эталоны (CIF)")
+cif_files = st.sidebar.file_uploader(
+    "Загрузите .cif файлы (заменят или дополнят MP)", 
+    type=['cif'], 
+    accept_multiple_files=True,
+    help="Загруженные CIF-файлы добавятся в общий список фаз. Это решает проблемы неточных DFT-ячеек из базы."
+)
+
 snip_iter = st.sidebar.slider("Агрессивность фона (SNIP)", 1, 100, 20, help="Чем больше итераций, тем 'ниже' опускается линия фона.")
 phases_to_find = st.sidebar.text_input("Фазы (формулы через запятую)", "Ag, Ag2O", help="Пример: TiO2, Rutile, Anatase (если база поддерживает имена)")
 b_inst = st.sidebar.number_input("Приборное уширение (deg 2θ)", value=0.05, min_value=0.000, format="%.3f")
@@ -311,6 +320,59 @@ if uploaded_files:
     # Показываем предупреждения, если они есть
     for warn in fetch_warnings:
         st.toast(warn, icon="⚠️")
+
+    # === ИНТЕГРАЦИЯ ПОЛЬЗОВАТЕЛЬСКИХ CIF-ФАЙЛОВ ===
+    if cif_files:
+        with st.spinner("Обработка локальных CIF-файлов..."):
+            for cif_file in cif_files:
+                try:
+                    cif_str = cif_file.read().decode('utf-8', errors='ignore')
+                    cif_name = os.path.splitext(cif_file.name)[0]
+                    
+                    # Читаем структуру
+                    struct = Structure.from_str(cif_str, fmt="cif")
+                    
+                    # Попытка стандартизации (для правильных hkl)
+                    try:
+                        sga_cif = SpacegroupAnalyzer(struct)
+                        conv_struct = sga_cif.get_conventional_standard_structure()
+                        crystal_sys = sga_cif.get_crystal_system()
+                        sg_sym = sga_cif.get_space_group_symbol()
+                    except:
+                        conv_struct = struct 
+                        crystal_sys = "Unknown"
+                        sg_sym = "Unknown"
+                        
+                    # Расчет паттерна (с учетом выбранной в сайдбаре длины волны)
+                    calc = XRDCalculator(wavelength=CALC_WAVELENGTH)
+                    pattern = calc.get_pattern(conv_struct)
+                    
+                    # Извлекаем HKL в том же формате, что и для Materials Project
+                    clean_hkls = []
+                    for hkl_group in pattern.hkls:
+                        if hkl_group:
+                            clean_hkls.append(tuple(hkl_group[0]['hkl']))
+                        else:
+                            clean_hkls.append((0, 0, 0))
+                    
+                    # Формируем названия
+                    formula = conv_struct.composition.reduced_formula
+                    full_name = f"📁 {formula} | {crystal_sys} (CIF: {cif_name})"
+                    legend_name = f"{formula} (CIF)"
+                    
+                    # Добавляем в общий словарь эталонов!
+                    ref_data[full_name] = {
+                        "pattern": pattern,
+                        "hkls": clean_hkls,
+                        "system": crystal_sys,
+                        "legend_name": legend_name,
+                        "density": conv_struct.density,
+                        "volume": conv_struct.volume,
+                        "mp_id": f"CIF-{cif_name}"
+                    }
+                except Exception as e:
+                    st.error(f"Ошибка при чтении CIF {cif_file.name}: {e}")
+    # ==============================================
     
     # Предлагаем пользователю выбрать из найденного
     if ref_data:
