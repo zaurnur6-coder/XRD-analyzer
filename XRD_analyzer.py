@@ -754,6 +754,16 @@ if uploaded_files:
                         ax_global.legend(loc='upper right', fontsize=9)
                         
                         st.pyplot(fig_global)
+                        # --- КНОПКА СОХРАНЕНИЯ ОБЩЕГО ГРАФИКА ---
+                        img_buf_global = io.BytesIO()
+                        fig_global.savefig(img_buf_global, format='png', dpi=dpi_val, bbox_inches='tight')
+                        st.download_button(
+                            label="🖼️ Скачать общий вид (PNG)",
+                            data=img_buf_global.getvalue(),
+                            file_name=f"global_fit_{sel_vis_samp}_{phase_short_name}.png",
+                            mime="image/png"
+                        )
+                        # ----------------------------------------
                         
                         # --- 2. ПЛИТКА ДЕТАЛЬНЫХ ГРАФИКОВ ---
                         st.markdown("##### 🔎 Детальный вид отдельных рефлексов")
