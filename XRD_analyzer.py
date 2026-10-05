@@ -788,7 +788,7 @@ if uploaded_files:
                                 elif "❌" in str(val): return 'color: red'
                                 return ''
                                 
-                            st.dataframe(df_peaks_status.style.applymap(highlight_status, subset=['Статус']), use_container_width=True)
+                            st.dataframe(df_peaks_status.style.map(highlight_status, subset=['Статус']), use_container_width=True)
                         else:
                             st.info("Нет теоретических рефлексов в данном диапазоне 2θ.")
                         
