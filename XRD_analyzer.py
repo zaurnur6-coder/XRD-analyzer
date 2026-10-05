@@ -10,6 +10,7 @@ from scipy import stats as scipy_stats
 from mp_api.client import MPRester
 from pymatgen.analysis.diffraction.xrd import XRDCalculator
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+import matplotlib.ticker as ticker
 
 # --- НАСТРОЙКИ СТИЛЯ ---
 st.set_page_config(page_title="XRD Advanced Batch Analyzer", layout="wide", page_icon="📈")
@@ -699,10 +700,14 @@ if uploaded_files:
                                            hkl_str, ha='center', va='bottom', fontsize=8, color='darkred', rotation=90)
                         
                         # Косметика общего графика
+                        ax_global.grid(True, which='both', linestyle=':', alpha=0.5)
                         ax_global.set_xlabel("2θ (deg.)")
                         ax_global.set_ylabel("Intensity")
                         ax_global.set_xlim(df_target['2theta'].min(), df_target['2theta'].max())
                         ax_global.set_ylim(-max_net_val * 0.05, max_net_val * 1.25) # Даем место сверху для подписей
+                        
+                        ax_global.xaxis.set_major_locator(ticker.MultipleLocator(5))  # Основные шаги (5, 10, 15...)
+                        ax_global.xaxis.set_minor_locator(ticker.MultipleLocator(1))
                         
                         # Фиктивные линии для легенды (чтобы не дублировались)
                         ax_global.plot([], [], color='red', lw=2, label='Фиты (Pseudo-Voigt)')
