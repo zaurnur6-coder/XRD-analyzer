@@ -673,26 +673,67 @@ if uploaded_files:
                     n_fits = len(active_fits)
                     
                     if n_fits > 0:
+                        # --- 1. ГРАФИК ОБЩЕГО ВИДА ---
+                        st.markdown("##### 🌍 Общая панорама: Эксперимент и зоны фитирования")
+                        df_target = all_data[sel_vis_samp]
+                        max_net_val = df_target['net'].max()
+                        
+                        fig_global, ax_global = plt.subplots(figsize=(10, 4))
+                        
+                        # Рисуем весь спектр образца (серым)
+                        ax_global.plot(df_target['2theta'], df_target['net'], color='gray', lw=1.2, alpha=0.6, label='Эксперимент (Net)')
+                        
+                        # Накладываем красные кривые фита и маркеры
+                        for f_data in active_fits:
+                            # Правильное форматирование hkl
+                            hkl_str = f"({', '.join(map(str, f_data['hkl']))})"
+                            
+                            # Рисуем саму красную кривую поверх спектра
+                            ax_global.plot(f_data["x"], f_data["y_fit"], color='red', lw=2)
+                            
+                            # Вертикальная линия по центру пика
+                            ax_global.axvline(f_data["center"], color='blue', linestyle=':', alpha=0.4)
+                            
+                            # Подпись hkl над пиком
+                            ax_global.text(f_data["center"], f_data["y_fit"].max() + (max_net_val * 0.05), 
+                                           hkl_str, ha='center', va='bottom', fontsize=8, color='darkred', rotation=90)
+                        
+                        # Косметика общего графика
+                        ax_global.set_xlabel("2θ (deg.)")
+                        ax_global.set_ylabel("Intensity")
+                        ax_global.set_xlim(df_target['2theta'].min(), df_target['2theta'].max())
+                        ax_global.set_ylim(-max_net_val * 0.05, max_net_val * 1.25) # Даем место сверху для подписей
+                        
+                        # Фиктивные линии для легенды (чтобы не дублировались)
+                        ax_global.plot([], [], color='red', lw=2, label='Фиты (Pseudo-Voigt)')
+                        ax_global.axvline(x=0, color='blue', linestyle=':', alpha=0.4, label='Центры пиков')
+                        ax_global.legend(loc='upper right', fontsize=9)
+                        
+                        st.pyplot(fig_global)
+                        
+                        # --- 2. ПЛИТКА ДЕТАЛЬНЫХ ГРАФИКОВ ---
+                        st.markdown("##### 🔎 Детальный вид отдельных рефлексов")
                         cols = min(3, n_fits)
                         rows = (n_fits + cols - 1) // cols
                         fig_fits, axes = plt.subplots(rows, cols, figsize=(4.5 * cols, 3.5 * rows))
                         
-                        # Обработка осей для Matplotlib (чтобы всегда был итерируемый список)
-                        if n_fits == 1: axes = [axes]
-                        else: axes = axes.flatten()
+                        # Безопасное выравнивание массива осей для Matplotlib
+                        axes = np.atleast_1d(axes).flatten()
                             
                         for i, f_data in enumerate(active_fits):
                             ax = axes[i]
                             ax.plot(f_data["x"], f_data["y"], 'k.', alpha=0.5, label='Exp. Net')
                             ax.plot(f_data["x"], f_data["y_fit"], 'r-', lw=2, label='Pseudo-Voigt Fit')
                             
-                            hkl_str = "".join(map(str, f_data["hkl"]))
-                            ax.set_title(f"hkl: {hkl_str} | 2θ ≈ {f_data['center']:.2f}°", fontsize=11)
+                            # Правильное форматирование hkl
+                            hkl_str = f"({', '.join(map(str, f_data['hkl']))})"
+                            
+                            ax.set_title(f"{hkl_str} | 2θ ≈ {f_data['center']:.2f}°", fontsize=11)
                             ax.set_xlabel("2θ (deg.)", fontsize=9)
                             ax.legend(fontsize=8, frameon=False)
                             ax.grid(True, alpha=0.3)
                             
-                        # Отключаем пустые ячейки (если пиков например 4 или 5)
+                        # Отключаем пустые ячейки (если пиков не кратно 3)
                         for j in range(n_fits, len(axes)):
                             axes[j].set_visible(False)
                             
@@ -701,7 +742,6 @@ if uploaded_files:
                 
                 st.divider()
                 # ================================================================
-                # Конец добавленного блока
                 
                 res_df = pd.DataFrame(all_results)
                 
