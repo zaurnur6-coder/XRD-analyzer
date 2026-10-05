@@ -681,8 +681,8 @@ if uploaded_files:
                         
                         fig_global, ax_global = plt.subplots(figsize=(10, 4))
                         
-                        # Рисуем весь спектр образца (серым)
-                        ax_global.plot(df_target['2theta'], df_target['net'], color='gray', lw=1.2, alpha=0.6, label='Experiment (Net)')
+                        # Рисуем весь спектр образца (ЯРКО: черный, непрозрачный, толщина 1.5)
+                        ax_global.plot(df_target['2theta'], df_target['net'], color='black', lw=1.5, alpha=1.0, label='Experiment (Net)')
                         
                         # Вытаскиваем короткое имя фазы для подписи (например, Fe2O3)
                         phase_short_name = sel_vis_ph.split('|')[0].strip()
@@ -692,33 +692,34 @@ if uploaded_files:
                             hkl_str = f"({', '.join(map(str, f_data['hkl']))})"
                             label_text = f"{phase_short_name} {hkl_str}"
                             
-                            # Линия фита: красная, пунктирная, полупрозрачная
-                            ax_global.plot(f_data["x"], f_data["y_fit"], color='red', linestyle='--', lw=2, alpha=0.6)
+                            # Линия фита: ВТОРОСТЕПЕННАЯ (красная, пунктирная, тонкая, полупрозрачная 50%)
+                            ax_global.plot(f_data["x"], f_data["y_fit"], color='red', linestyle='--', lw=1.2, alpha=0.5)
                             
                             # Вертикальная линия по центру пика
-                            ax_global.axvline(f_data["center"], color='blue', linestyle=':', alpha=0.4)
+                            ax_global.axvline(f_data["center"], color='blue', linestyle=':', alpha=0.3)
                             
-                            # Подпись (Фаза + hkl) над пиком: подняли на 15% от макс. интенсивности
+                            # Подпись (Фаза + hkl) над пиком
                             text_y_pos = f_data["y_fit"].max() + (max_net_val * 0.15)
+                            
                             ax_global.text(f_data["center"], text_y_pos, 
-                                           label_text, ha='center', va='bottom', fontsize=8, color='darkred', rotation=90)
+                                           label_text, ha='center', va='bottom', fontsize=8, color='darkred', rotation=90,
+                                           bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5))
                         
                         # Косметика общего графика
-                        import matplotlib.ticker as ticker  # Импорт для работы MultipleLocator
-                        ax_global.grid(True, which='both', linestyle=':', alpha=0.8)
+                        import matplotlib.ticker as ticker
+                        ax_global.grid(True, which='both', linestyle=':', alpha=0.5)
                         ax_global.set_xlabel("2θ (deg.)")
                         ax_global.set_ylabel("Intensity (a.u.)")
                         ax_global.set_xlim(df_target['2theta'].min(), df_target['2theta'].max())
                         
-                        # Увеличили верхний предел до 1.4, чтобы длинные подписи поместились
                         ax_global.set_ylim(-max_net_val * 0.05, max_net_val * 1.1) 
                         
-                        ax_global.xaxis.set_major_locator(ticker.MultipleLocator(5))  # Основные шаги (5, 10, 15...)
-                        ax_global.xaxis.set_minor_locator(ticker.MultipleLocator(1))  # Мелкие шаги (1, 2, 3...)
+                        ax_global.xaxis.set_major_locator(ticker.MultipleLocator(5))
+                        ax_global.xaxis.set_minor_locator(ticker.MultipleLocator(1))
                         
-                        # Фиктивные линии для легенды
-                        ax_global.plot([], [], color='red', linestyle='--', lw=2, alpha=0.6, label='Pseudo-Voigt Fits')
-                        ax_global.axvline(x=0, color='blue', linestyle=':', alpha=0.4, label='Peak Centers')
+                        # Фиктивные линии для легенды (с обновленными стилями)
+                        ax_global.plot([], [], color='red', linestyle='--', lw=1.2, alpha=0.5, label='Pseudo-Voigt Fits')
+                        ax_global.axvline(x=0, color='blue', linestyle=':', alpha=0.3, label='Peak Centers')
                         ax_global.legend(loc='upper right', fontsize=9)
                         
                         st.pyplot(fig_global)
