@@ -622,7 +622,7 @@ if uploaded_files:
                         if 0.5 < size_nm < 500:
                             all_results.append({
                                 "Образец":         f_name,
-                                "Фаза":            f"{p_name.split('|')[0]}",
+                                "Фаза":            p_info["legend_name"],
                                 "hkl":             f"({', '.join(map(str, hkl_tuple))})",
                                 "2θ":              round(center,       3),
                                 "FWHM_obs (°)":    round(fwhm_obs,     4),
