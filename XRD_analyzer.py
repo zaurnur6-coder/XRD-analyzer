@@ -358,7 +358,7 @@ if uploaded_files:
                     # Формируем названия
                     formula = conv_struct.composition.reduced_formula
                     full_name = f"📁 {formula} | {crystal_sys} (CIF: {cif_name})"
-                    legend_name = f"{formula} (CIF)"
+                    legend_name = f"{cif_name}"
                     
                     # Добавляем в общий словарь эталонов!
                     ref_data[full_name] = {
