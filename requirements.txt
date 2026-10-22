@@ -1,3 +1,4 @@
+streamlit
 pandas
 matplotlib
 numpy<2.0.0
@@ -5,3 +6,4 @@ scipy
 pymatgen==2026.9.24
 mp-api==0.44.0
 emmet-core==0.84.4
+pyarrow<21
