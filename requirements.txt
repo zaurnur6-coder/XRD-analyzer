@@ -3,5 +3,5 @@ pandas
 matplotlib
 numpy
 scipy
-pymatgen
-mp-api
+pymatgen==2026.9.24
+mp-api==0.47.0
