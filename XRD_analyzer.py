@@ -89,77 +89,78 @@ def pseudo_voigt(x, a, x0, hwhm, eta, offset):
 
 @st.cache_data(show_spinner=False)
 def get_theoretical_patterns(phases_list, _api_key, calc_wavelength="CuKa"):
-    if not _api_key or not phases_list: 
+    if not _api_key or not phases_list:
         return {}, []
-    
+
     results = {}
     warnings = []
     target_formulas = list(set([p.strip() for p in phases_list.split(",") if p.strip()]))
-    
+
     try:
-        with MPRester(_api_key) as mpr:
+        # use_document_model=False: сырые словари, без pydantic-проверки нового формата MPID
+        with MPRester(_api_key, use_document_model=False) as mpr:
             for formula in target_formulas:
                 try:
                     docs = mpr.summary.search(
-                        formula=formula, 
-                        energy_above_hull=(0, 2.0), 
+                        formula=formula,
+                        energy_above_hull=(0, 2.0),
                         fields=[
-                            "structure", "material_id", "symmetry", 
+                            "structure", "material_id", "symmetry",
                             "is_stable", "energy_above_hull", "formula_pretty",
                             "density", "volume"
                         ]
                     )
-                    
+
                     if not docs:
                         warnings.append(f"Фаза {formula} не найдена.")
                         continue
 
-                    sorted_docs = sorted(docs, key=lambda x: x.energy_above_hull)
+                    sorted_docs = sorted(docs, key=lambda d: d.get("energy_above_hull") or 0.0)
 
                     for doc in sorted_docs:
-                        e_hull = round(doc.energy_above_hull, 3)
-                        st_label = "✅ Stable" if (doc.is_stable or e_hull <= 0.0) else f"⚠️ Metastable (+{e_hull} eV)"
-                        
-                        # Безопасное извлечение, работающее и в старых, и в новых версиях mp-api
-                        crystal_sys = doc.symmetry.crystal_system.value if hasattr(doc.symmetry.crystal_system, 'value') else str(doc.symmetry.crystal_system)
-                        space_group = doc.symmetry.symbol
-                        m_id = str(doc.material_id) 
-                        
-                        clean_name = f"{doc.formula_pretty} | {crystal_sys} ({m_id})"
+                        e_hull = round(doc.get("energy_above_hull") or 0.0, 3)
+                        st_label = "✅ Stable" if (doc.get("is_stable") or e_hull <= 0.0) else f"⚠️ Metastable (+{e_hull} eV)"
+
+                        sym = doc.get("symmetry") or {}
+                        cs = sym.get("crystal_system")
+                        crystal_sys = str(getattr(cs, "value", cs))
+                        space_group = sym.get("symbol")
+                        m_id = str(doc["material_id"])
+
+                        struct = doc["structure"]
+                        if isinstance(struct, dict):
+                            struct = Structure.from_dict(struct)
+
+                        clean_name = f"{doc['formula_pretty']} | {crystal_sys} ({m_id})"
                         full_name = f"{clean_name} | {space_group} | {st_label}"
 
                         try:
-                            sga = SpacegroupAnalyzer(doc.structure)
-                            conventional_structure = sga.get_conventional_standard_structure()
-                        except:
-                            conventional_structure = doc.structure # Если сбой, берем как есть
-                        
+                            conventional_structure = SpacegroupAnalyzer(struct).get_conventional_standard_structure()
+                        except Exception:
+                            conventional_structure = struct
+
                         calc = XRDCalculator(wavelength=calc_wavelength)
                         pattern = calc.get_pattern(conventional_structure)
-                        
-                        # --- ВОЗВРАЩАЕМ ИЗВЛЕЧЕНИЕ HKL (для вкладки Шеррера) ---
+
                         clean_hkls = []
                         for hkl_group in pattern.hkls:
                             if hkl_group:
-                                # Берем первый hkl и превращаем в кортеж
-                                h = hkl_group[0]['hkl']
-                                clean_hkls.append(tuple(h))
+                                clean_hkls.append(tuple(hkl_group[0]['hkl']))
                             else:
                                 clean_hkls.append((0, 0, 0))
-                        
-                        # Собираем полный словарь данных
+
                         results[full_name] = {
                             "pattern": pattern,
-                            "hkls": clean_hkls,        # <--- ТЕПЕРЬ ОШИБКИ НЕ БУДЕТ
+                            "hkls": clean_hkls,
                             "system": crystal_sys,
                             "legend_name": clean_name,
-                            "density": doc.density,
-                            "volume": doc.volume,
+                            "density": doc.get("density"),
+                            "volume": doc.get("volume"),
                             "mp_id": m_id
                         }
                 except Exception as e:
                     warnings.append(f"Ошибка при поиске {formula}: {str(e)}")
-                    
+
         return results, warnings
     except Exception as e:
         return {}, [f"Ошибка авторизации MP: {str(e)}"]
