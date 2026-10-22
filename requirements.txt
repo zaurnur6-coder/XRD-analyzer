@@ -4,5 +4,4 @@ matplotlib
 numpy<2.0.0
 scipy
 pymatgen==2026.9.24
-emmet-core==0.87.3
 mp-api==0.47.0
