@@ -1,7 +1,7 @@
 streamlit
 pandas
 matplotlib
-numpy<2.0.0
+numpy
 scipy
-pymatgen==2026.9.24
-mp-api==0.47.0
+pymatgen
+mp-api
